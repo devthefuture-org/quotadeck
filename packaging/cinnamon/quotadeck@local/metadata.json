@@ -1,0 +1,7 @@
+{
+  "uuid": "quotadeck@local",
+  "name": "QuotaDeck",
+  "description": "Shows the tightest local AI quota window in the Cinnamon panel.",
+  "icon": "quotadeck",
+  "max-instances": 1
+}

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=QuotaDeck
+GenericName=AI Quota Dashboard
+Comment=Monitor local AI quota windows across providers
+Exec=quotadeck-desktop
+Icon=quotadeck
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=Quotadeck
+Keywords=AI;quota;Codex;Claude;Z.ai;

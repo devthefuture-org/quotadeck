@@ -1,0 +1,30 @@
+{
+  "data": {
+    "planName": "GLM Coding Pro",
+    "limits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": "HOUR",
+        "number": 5,
+        "usage": 420,
+        "limit": 1000,
+        "nextResetTime": 1900000000000
+      },
+      {
+        "id": "weekly-model",
+        "name": "GLM-5 weekly",
+        "type": "TOKENS_LIMIT",
+        "windowMinutes": 10080,
+        "percentage": 71,
+        "nextResetTime": "2030-03-01T00:00:00Z"
+      },
+      {
+        "type": "TIME_LIMIT",
+        "unit": "MONTH",
+        "number": 1,
+        "remaining": 800,
+        "limit": 1000
+      }
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+version: 2
+
+before:
+  hooks:
+    - npm --prefix web ci
+    - npm --prefix web run build
+
+builds:
+  - id: quotadeck
+    main: ./cmd/quotadeck
+    binary: quotadeck
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+nfpms:
+  - id: deb
+    package_name: quotadeck
+    ids: [quotadeck]
+    formats: [deb]
+    vendor: QuotaDeck
+    homepage: https://github.com/devthefuture-org/quotadeck
+    maintainer: QuotaDeck contributors
+    description: Local multi-provider AI quota dashboard
+    license: MIT
+    contents:
+      - src: packaging/systemd/quotadeck.service
+        dst: /usr/lib/systemd/user/quotadeck.service
+      - src: LICENSE
+        dst: /usr/share/doc/quotadeck/copyright
+
+archives:
+  - formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt

@@ -1,0 +1,14 @@
+[Unit]
+Description=QuotaDeck local AI quota dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/quotadeck serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

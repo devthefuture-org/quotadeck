@@ -1,0 +1,39 @@
+server:
+  bind: 127.0.0.1
+  port: 9211
+
+storage:
+  database: ~/.local/share/quotadeck/quotadeck.db
+  retentionDays: 30
+
+polling:
+  interval: 60s
+  timeout: 20s
+
+providers:
+  claude:
+    enabled: true
+    binary: cswap
+
+  zai:
+    enabled: true
+    requestTimeout: 15s
+    maxRetries: 3
+    accounts:
+      - label: personal
+        keyEnv: ZAI_API_KEY_PERSONAL
+        region: global
+      - label: team
+        keyEnv: ZAI_API_KEY_TEAM
+        region: global
+        organizationIdEnv: ZAI_ORG_ID_TEAM
+        workspaceIdEnv: ZAI_WORKSPACE_ID_TEAM
+
+  codex:
+    enabled: true
+    binary: codex
+    accounts:
+      - label: personal
+        home: ~/.codex
+      - label: work
+        home: ~/.codex-work

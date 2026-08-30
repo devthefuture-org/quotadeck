@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "accounts": [
+    {
+      "number": 1,
+      "email": "redacted@example.invalid",
+      "usageStatus": "unavailable",
+      "usage": null,
+      "lastGoodAgeSeconds": 420,
+      "lastGoodUsage": {
+        "fiveHour": { "pct": 44, "resetsAt": "2030-06-22T23:29:59Z" }
+      }
+    }
+  ]
+}

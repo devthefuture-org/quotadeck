@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "QuotaDeck",
+  "outputfilename": "quotadeck-desktop",
+  "frontend:install": "true",
+  "frontend:build": "true",
+  "frontend:dev": "true",
+  "frontend:dev:serverUrl": "auto",
+  "version": "2",
+  "info": {
+    "companyName": "QuotaDeck",
+    "productName": "QuotaDeck",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026",
+    "comments": "Local multi-provider AI quota dashboard"
+  }
+}

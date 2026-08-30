@@ -1,0 +1,11 @@
+/dist/
+/web/node_modules/
+/cmd/quotadeck-desktop/build/
+/cmd/quotadeck-desktop/frontend/
+/graphify-out/
+*.db
+*.db-shm
+*.db-wal
+*.deb
+.DS_Store
+coverage.out

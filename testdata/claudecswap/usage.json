@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "activeAccountNumber": 2,
+  "accounts": [
+    {
+      "number": 2,
+      "alias": "work",
+      "email": "redacted@example.invalid",
+      "active": true,
+      "usageStatus": "ok",
+      "usageAgeSeconds": 12,
+      "usage": {
+        "fiveHour": { "pct": 25, "resetsAt": "2030-06-22T23:29:59Z" },
+        "sevenDay": {
+          "pct": 61,
+          "resetsAt": "2030-06-26T17:59:59Z",
+          "expectedPct": 48,
+          "projectedExhaustionAt": "2030-06-25T08:00:00Z",
+          "willLastToReset": false
+        },
+        "scoped": [
+          { "name": "Sonnet", "pct": 73, "resetsAt": "2030-06-26T17:59:59Z" },
+          { "name": "Opus", "pct": 12, "resetsAt": "2030-06-26T17:59:59Z" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+name: quotadeck
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: QuotaDeck contributors
+description: Local multi-provider AI quota dashboard
+license: MIT
+depends:
+  - libwebkit2gtk-4.1-0
+  - libsoup-3.0-0
+contents:
+  - src: ./dist/quotadeck
+    dst: /usr/bin/quotadeck
+  - src: ./packaging/systemd/quotadeck.service
+    dst: /usr/lib/systemd/user/quotadeck.service
+  - src: ./dist/quotadeck-desktop-linux-amd64
+    dst: /usr/bin/quotadeck-desktop
+    file_info:
+      mode: 0755
+  - src: ./packaging/desktop/quotadeck.desktop
+    dst: /usr/share/applications/quotadeck.desktop
+  - src: ./packaging/desktop/quotadeck.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/quotadeck.svg
+  - src: ./packaging/cinnamon/quotadeck@local/applet.js
+    dst: /usr/share/cinnamon/applets/quotadeck@local/applet.js
+  - src: ./packaging/cinnamon/quotadeck@local/metadata.json
+    dst: /usr/share/cinnamon/applets/quotadeck@local/metadata.json
+  - src: ./packaging/cinnamon/quotadeck@local/stylesheet.css
+    dst: /usr/share/cinnamon/applets/quotadeck@local/stylesheet.css
+  - src: ./packaging/cinnamon/quotadeck@local/icon-symbolic.svg
+    dst: /usr/share/cinnamon/applets/quotadeck@local/icon-symbolic.svg
+  - src: ./LICENSE
+    dst: /usr/share/doc/quotadeck/copyright
