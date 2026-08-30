@@ -41,6 +41,7 @@ cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/quotadeck-appimage-${appimage_arch}"
 mkdir -p "$cache_dir"
 linuxdeploy="$cache_dir/linuxdeploy"
 gtk_plugin="$cache_dir/linuxdeploy-plugin-gtk"
+appimagetool="$cache_dir/appimagetool"
 if [[ ! -x "$linuxdeploy" ]]; then
   curl -fsSL -o "$linuxdeploy" "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${appimage_arch}.AppImage"
   chmod +x "$linuxdeploy"
@@ -48,6 +49,10 @@ fi
 if [[ ! -x "$gtk_plugin" ]]; then
   curl -fsSL -o "$gtk_plugin" "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/3b67a1d1c1b0c8268f57f2bce40fe2d33d409cea/linuxdeploy-plugin-gtk.sh"
   chmod +x "$gtk_plugin"
+fi
+if [[ ! -x "$appimagetool" ]]; then
+  curl -fsSL -o "$appimagetool" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${appimage_arch}.AppImage"
+  chmod +x "$appimagetool"
 fi
 
 export PATH="$cache_dir:$PATH"
@@ -60,7 +65,18 @@ ARCH="$appimage_arch" "$linuxdeploy" --appimage-extract-and-run \
   --exclude-library='libgcrypt.so*' \
   --exclude-library='libgpg-error.so*' \
   --exclude-library='libssl.so*' \
-  --exclude-library='libcrypto.so*' \
-  --output appimage
+  --exclude-library='libcrypto.so*'
+
+# The GTK plugin may add host-specific crypto libraries after linuxdeploy has
+# evaluated the exclusions. Let the target system provide these paired libs.
+find "$appdir" -type f \( \
+  -name 'libgcrypt.so*' -o \
+  -name 'libgpg-error.so*' -o \
+  -name 'libssl.so*' -o \
+  -name 'libcrypto.so*' \
+\) -delete
+
+rm -f "$OUTPUT"
+ARCH="$appimage_arch" "$appimagetool" --appimage-extract-and-run "$appdir" "$OUTPUT"
 
 echo "Built $OUTPUT"

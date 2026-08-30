@@ -1,11 +1,11 @@
 SHELL := /bin/bash
 VERSION ?= 0.1.0
 GO_ENV := GOCACHE=/tmp/quotadeck-go-cache GOMODCACHE=/tmp/quotadeck-go-mod
-DESKTOP_GO_ENV := GOCACHE=/tmp/quotadeck-go-cache GOMODCACHE=/home/jo/go/pkg/mod
-WAILS ?= /home/jo/go/bin/wails
+DESKTOP_GO_ENV := GOCACHE=/tmp/quotadeck-go-cache
+WAILS ?= $(shell go env GOPATH)/bin/wails
 PKG_CONFIG_ENV := PKG_CONFIG=/usr/bin/pkg-config PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
-.PHONY: dev web-build test test-race lint build desktop-icon desktop-build package-cinnamon package-appimage package-deb clean
+.PHONY: dev web-build test test-race lint build desktop-icon desktop-build package-cinnamon package-appimage package-deb package-release clean
 
 dev:
 	npm --prefix web run dev & web_pid=$$!; trap 'kill $$web_pid 2>/dev/null || true' EXIT; $(GO_ENV) go run ./cmd/quotadeck serve
@@ -45,6 +45,11 @@ package-appimage: desktop-build
 
 package-deb: build desktop-build package-cinnamon
 	VERSION=$(VERSION) ./scripts/package-deb.sh
+
+package-release: build desktop-build package-cinnamon
+	VERSION=$(VERSION) ./scripts/package-deb.sh
+	VERSION=$(VERSION) ./scripts/desktop/build-appimage.sh amd64
+	VERSION=$(VERSION) ./scripts/package-release.sh
 
 clean:
 	rm -rf dist web/node_modules internal/httpapi/ui/assets

@@ -79,6 +79,8 @@ make package-appimage
 
 The first AppImage build downloads `linuxdeploy` and its GTK plugin into the user cache. The resulting file is written to `dist/QuotaDeck-<version>-x86_64.AppImage`.
 
+Prebuilt packages, portable archives, and SHA-256 checksums are available from the [latest GitHub release](https://github.com/devthefuture-org/quotadeck/releases/latest).
+
 ## Security and license
 
 - Loopback binding is enforced by configuration validation.

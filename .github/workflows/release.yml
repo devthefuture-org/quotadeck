@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build without publishing
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-22.04
+    env:
+      WAILS_VERSION: v2.14.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Resolve release metadata
+        id: metadata
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${{ inputs.version }}"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            desktop-file-utils \
+            dpkg-dev \
+            gtk-update-icon-cache \
+            imagemagick \
+            libfuse2 \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            xxd \
+            zip
+
+      - name: Install project dependencies
+        run: |
+          npm ci --prefix web
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+
+      - name: Test
+        run: |
+          make test
+          make lint
+
+      - name: Build release assets
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: make package-release
+
+      - name: Verify release assets
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          sha256sum --check "dist/quotadeck_${VERSION}_checksums.txt"
+          dpkg-deb --info "dist/quotadeck_${VERSION}_amd64.deb"
+          unzip -t "dist/quotadeck-cinnamon-applet_${VERSION}.zip"
+          tar -tzf dist/quotadeck-cli-linux-amd64.tar.gz
+          tar -tzf dist/quotadeck-desktop-linux-amd64.tar.gz
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: quotadeck-${{ steps.metadata.outputs.version }}-linux-amd64
+          if-no-files-found: error
+          path: |
+            dist/quotadeck-cli-linux-amd64.tar.gz
+            dist/quotadeck-desktop-linux-amd64.tar.gz
+            dist/QuotaDeck-${{ steps.metadata.outputs.version }}-x86_64.AppImage
+            dist/quotadeck_${{ steps.metadata.outputs.version }}_amd64.deb
+            dist/quotadeck-cinnamon-applet_${{ steps.metadata.outputs.version }}.zip
+            dist/quotadeck_${{ steps.metadata.outputs.version }}_checksums.txt
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          assets=(
+            dist/quotadeck-cli-linux-amd64.tar.gz
+            dist/quotadeck-desktop-linux-amd64.tar.gz
+            "dist/QuotaDeck-${VERSION}-x86_64.AppImage"
+            "dist/quotadeck_${VERSION}_amd64.deb"
+            "dist/quotadeck-cinnamon-applet_${VERSION}.zip"
+            "dist/quotadeck_${VERSION}_checksums.txt"
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            notes="docs/releases/${TAG}.md"
+            if [[ -f "$notes" ]]; then
+              gh release create "$TAG" "${assets[@]}" --title "QuotaDeck $TAG" --notes-file "$notes"
+            else
+              gh release create "$TAG" "${assets[@]}" --title "QuotaDeck $TAG" --generate-notes
+            fi
+          fi
