@@ -90,7 +90,7 @@ jobs:
         env:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: |
-          sha256sum --check "dist/quotadeck_${VERSION}_checksums.txt"
+          (cd dist && sha256sum --check "quotadeck_${VERSION}_checksums.txt")
           dpkg-deb --info "dist/quotadeck_${VERSION}_amd64.deb"
           unzip -t "dist/quotadeck-cinnamon-applet_${VERSION}.zip"
           tar -tzf dist/quotadeck-cli-linux-amd64.tar.gz
