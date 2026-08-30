@@ -1,10 +1,25 @@
 package codex
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 )
+
+func TestDiscoverUsesProcessCodexHomeByDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	provider := New("sh", nil)
+
+	accounts, err := provider.Discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 || accounts[0].Ref != filepath.Clean(home) {
+		t.Fatalf("expected CODEX_HOME %q, got %#v", home, accounts)
+	}
+}
 
 func TestParseMultiBucketRateLimits(t *testing.T) {
 	accountJSON := []byte(`{"account":{"type":"chatgpt","email":"redacted@example.invalid","planType":"plus"},"requiresOpenaiAuth":false}`)

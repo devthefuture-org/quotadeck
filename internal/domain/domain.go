@@ -183,9 +183,12 @@ func NormalizeSnapshot(snapshot Snapshot) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func StaleFrom(previous Snapshot, now time.Time, code, message string) Snapshot {
+func StaleFrom(previous Snapshot, now time.Time, status, code, message string) Snapshot {
 	previous.FetchedAt = now.UTC()
-	previous.Status = StatusUnavailable
+	if status == "" {
+		status = StatusUnavailable
+	}
+	previous.Status = status
 	previous.Stale = true
 	previous.ErrorCode = code
 	previous.ErrorMessage = message

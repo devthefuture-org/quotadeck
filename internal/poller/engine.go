@@ -130,36 +130,44 @@ func (e *Engine) refreshProvider(parent context.Context, provider domain.Provide
 		return fmt.Errorf("%s discovery: %w", provider.ID(), err)
 	}
 	var wait sync.WaitGroup
+	errorsChannel := make(chan error, len(candidates))
 	for _, candidate := range candidates {
 		candidate := candidate
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			e.fetchAccount(ctx, provider, candidate)
+			if err := e.fetchAccount(ctx, provider, candidate); err != nil {
+				errorsChannel <- fmt.Errorf("%s: %w", candidate.Label, err)
+			}
 		}()
 	}
 	wait.Wait()
-	return nil
+	close(errorsChannel)
+	var failures []error
+	for err := range errorsChannel {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
 
-func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, candidate domain.AccountCandidate) {
+func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, candidate domain.AccountCandidate) error {
 	persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	account, snapshot, err := provider.Fetch(ctx, candidate)
-	if err != nil {
+	account, snapshot, fetchErr := provider.Fetch(ctx, candidate)
+	if fetchErr != nil {
 		account = domain.Account{
 			ID: candidate.ID, ProviderID: candidate.ProviderID, Label: candidate.Label,
 			Source: candidate.Source, SourceMeta: cloneMeta(candidate.SourceMeta),
 		}
-		code := domain.ErrorCode(err)
+		code := domain.ErrorCode(fetchErr)
 		status := domain.StatusUnavailable
 		if strings.Contains(code, "auth") || strings.Contains(code, "credential") {
 			status = domain.StatusAuthError
 		}
-		message := safeMessage(err)
+		message := safeMessage(fetchErr)
 		if previous, previousErr := e.store.Latest(persistCtx, candidate.ID); previousErr == nil && len(previous.Snapshot.Windows) > 0 {
 			account = previous.Account
-			snapshot = domain.StaleFrom(previous.Snapshot, time.Now(), code, message)
+			snapshot = domain.StaleFrom(previous.Snapshot, time.Now(), status, code, message)
 		} else {
 			snapshot = domain.Snapshot{
 				AccountID: account.ID, FetchedAt: time.Now().UTC(), Status: status, Stale: true,
@@ -168,12 +176,13 @@ func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, can
 		}
 	}
 	if saveErr := e.store.Save(persistCtx, account, snapshot); saveErr != nil {
-		return
+		return fmt.Errorf("persist account state: %w", saveErr)
 	}
 	e.hub.Publish(map[string]any{
 		"type": "state", "providerId": account.ProviderID, "accountId": account.ID,
 		"status": snapshot.Status, "at": snapshot.FetchedAt,
 	})
+	return fetchErr
 }
 
 func (e *Engine) markProviderUnavailable(providerID string, cause error) {
@@ -190,7 +199,7 @@ func (e *Engine) markProviderUnavailable(providerID string, cause error) {
 		if err != nil {
 			continue
 		}
-		snapshot := domain.StaleFrom(previous.Snapshot, time.Now(), code, message)
+		snapshot := domain.StaleFrom(previous.Snapshot, time.Now(), domain.StatusUnavailable, code, message)
 		_ = e.store.Save(ctx, account, snapshot)
 	}
 	e.hub.Publish(map[string]any{"type": "provider-error", "providerId": providerID, "code": code, "at": time.Now().UTC()})

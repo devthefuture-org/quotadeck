@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible QuotaDeck problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve QuotaDeck. Never paste tokens, auth files, or unredacted diagnostics.
+  - type: input
+    id: version
+    attributes:
+      label: QuotaDeck version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Web dashboard / CLI
+        - Desktop application
+        - Cinnamon applet
+        - Debian package
+        - AppImage
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the actual and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. Start QuotaDeck…\n2. Open…\n3. See…"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distribution, desktop, install method, and provider. Redact usernames and paths.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed tokens, credentials, personal account labels, and private paths.
+          required: true

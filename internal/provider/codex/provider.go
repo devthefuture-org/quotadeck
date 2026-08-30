@@ -41,7 +41,7 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 	}
 	accounts := append([]config.CodexAccountConfig(nil), p.accounts...)
 	if len(accounts) == 0 {
-		accounts = []config.CodexAccountConfig{{Label: "Codex", Home: "~/.codex"}}
+		accounts = []config.CodexAccountConfig{{Label: "Codex", Home: config.DefaultCodexHome()}}
 	}
 	result := make([]domain.AccountCandidate, 0, len(accounts))
 	for index, item := range accounts {

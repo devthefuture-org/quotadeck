@@ -102,6 +102,15 @@ func DefaultPath() string {
 	return filepath.Join(dir, "quotadeck", "config.yaml")
 }
 
+// DefaultCodexHome follows Codex CLI's process-level profile selection before
+// falling back to the conventional home directory.
+func DefaultCodexHome() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	return "~/.codex"
+}
+
 func Load(path string) (Config, error) {
 	cfg := Default()
 	if path == "" {

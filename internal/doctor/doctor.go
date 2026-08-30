@@ -117,7 +117,7 @@ func (c Collector) zaiSources() []SourceCheck {
 func (c Collector) codexSources() []SourceCheck {
 	accounts := append([]config.CodexAccountConfig(nil), c.Config.Providers.Codex.Accounts...)
 	if len(accounts) == 0 {
-		accounts = []config.CodexAccountConfig{{Label: "Codex", Home: "~/.codex"}}
+		accounts = []config.CodexAccountConfig{{Label: "Codex", Home: config.DefaultCodexHome()}}
 	}
 	checks := make([]SourceCheck, 0, len(accounts))
 	for _, account := range accounts {

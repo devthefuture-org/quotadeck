@@ -249,8 +249,9 @@ function AccountCard({ state, mode, now }: { state: AccountState; mode: 'used' |
 }
 
 function WindowRow({ window, mode, now, constrained }: { window: QuotaWindow; mode: 'used' | 'remaining'; now: number; constrained: boolean }) {
-  const used = clamp(window.usedPercent ?? percentageFromValues(window))
-  const percentage = mode === 'used' ? used : 100 - used
+  const rawUsed = window.usedPercent ?? percentageFromValues(window)
+  const used = rawUsed == null ? null : clamp(rawUsed)
+  const percentage = used == null ? null : mode === 'used' ? used : 100 - used
   const reset = window.resetsAt ? relativeTime(window.resetsAt, now) : 'No reset supplied'
   const title = window.resetsAt ? new Date(window.resetsAt).toLocaleString() : undefined
   return (
@@ -260,10 +261,10 @@ function WindowRow({ window, mode, now, constrained }: { window: QuotaWindow; mo
         {constrained && <em>tightest</em>}
       </div>
       <div class="meter-line">
-        <div class="meter" role="progressbar" aria-valuenow={Math.round(percentage)} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${percentage}%` }} />
+        <div class="meter" role="progressbar" aria-valuenow={percentage == null ? undefined : Math.round(percentage)} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${percentage ?? 0}%` }} />
         </div>
-        <strong>{Number.isFinite(percentage) ? `${Math.round(percentage)}%` : '—'}</strong>
+        <strong>{percentage == null ? '—' : `${Math.round(percentage)}%`}</strong>
       </div>
       <div class="window-meta">
         <span>{mode === 'used' ? 'consumed' : 'remaining'}</span>
@@ -317,10 +318,10 @@ function Diagnostics() {
   )
 }
 
-function percentageFromValues(window: QuotaWindow): number {
+function percentageFromValues(window: QuotaWindow): number | null {
   if (window.used != null && window.limit) return window.used / window.limit * 100
   if (window.remaining != null && window.limit) return 100 - window.remaining / window.limit * 100
-  return 0
+  return null
 }
 
 function clamp(value: number): number { return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0)) }

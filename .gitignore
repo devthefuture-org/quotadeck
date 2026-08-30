@@ -1,5 +1,8 @@
 /dist/
 /web/node_modules/
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
 /cmd/quotadeck-desktop/build/
 /cmd/quotadeck-desktop/frontend/
 /graphify-out/
