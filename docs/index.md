@@ -22,7 +22,7 @@ features:
     details: Rolling, weekly, monthly, token, or future provider-defined windows stay dynamic end to end.
   - icon: ◉
     title: Every account
-    details: Follow several Claude slots, Codex homes, and Z.ai plans from one compact dashboard.
+    details: Follow several Claude slots, Codex homes, and Z.ai plans, then select the plan new Claude Code sessions should use.
   - icon: ◇
     title: Local by design
     details: Loopback-only API, SQLite history, zero telemetry, and no credential export.

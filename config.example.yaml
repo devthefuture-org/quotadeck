@@ -19,6 +19,8 @@ providers:
     enabled: true
     requestTimeout: 15s
     maxRetries: 3
+    # The packaged service reads these variables from
+    # ~/.config/quotadeck/environment when that file exists.
     accounts:
       - label: personal
         keyEnv: ZAI_API_KEY_PERSONAL

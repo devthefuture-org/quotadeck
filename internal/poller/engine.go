@@ -129,6 +129,11 @@ func (e *Engine) refreshProvider(parent context.Context, provider domain.Provide
 		e.markProviderUnavailable(provider.ID(), err)
 		return fmt.Errorf("%s discovery: %w", provider.ID(), err)
 	}
+	if len(candidates) == 0 {
+		err := &domain.CodedError{Code: "source_missing", Err: errors.New("no account source discovered")}
+		e.markProviderUnavailable(provider.ID(), err)
+		return fmt.Errorf("%s discovery: %w", provider.ID(), err)
+	}
 	var wait sync.WaitGroup
 	errorsChannel := make(chan error, len(candidates))
 	for _, candidate := range candidates {

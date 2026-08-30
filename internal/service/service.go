@@ -29,6 +29,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-%%h/.config/quotadeck/environment
 ExecStart=%s serve
 Restart=on-failure
 RestartSec=5

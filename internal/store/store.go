@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/domain"
@@ -15,7 +17,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	writeMu sync.Mutex
 }
 
 func Open(path string) (*Store, error) {
@@ -27,7 +30,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -43,6 +46,21 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func sqliteDSN(path string) string {
+	var parsed *url.URL
+	if path == ":memory:" {
+		parsed = &url.URL{Scheme: "file", Opaque: ":memory:"}
+	} else {
+		parsed = &url.URL{Scheme: "file", Path: path}
+	}
+	query := parsed.Query()
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(ON)")
+	query.Add("_pragma", "synchronous(NORMAL)")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -124,6 +142,8 @@ func (s *Store) Save(ctx context.Context, account domain.Account, snapshot domai
 	if err != nil {
 		return fmt.Errorf("encode source metadata: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin snapshot transaction: %w", err)
@@ -291,6 +311,8 @@ func (s *Store) History(ctx context.Context, accountID string, from, to time.Tim
 }
 
 func (s *Store) Prune(ctx context.Context, before time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	result, err := s.db.ExecContext(ctx, "DELETE FROM snapshots WHERE fetched_at < ?", before.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("prune snapshots: %w", err)

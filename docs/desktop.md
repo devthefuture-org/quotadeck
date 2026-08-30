@@ -16,7 +16,7 @@ After installing the `.deb`:
 2. Find **QuotaDeck**.
 3. Add it to the panel.
 
-The applet reads the loopback API and starts the packaged user service when necessary. Its menu summarizes the tightest quota window and opens the full dashboard for details.
+The applet reads the loopback API and starts the packaged user service when necessary. Its menu summarizes every quota window and opens the full dashboard for details. In the applet settings, **Plan / account** selects the subscription to represent in the panel and **Indicator** selects one of its quota windows. Both default to automatic selection of the tightest available window. The QuotaDeck icon is displayed beside the percentage.
 
 To install only the applet from a source checkout:
 

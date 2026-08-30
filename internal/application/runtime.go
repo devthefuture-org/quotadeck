@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
+	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/httpapi"
@@ -40,7 +41,12 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 	timeout, _ := cfg.PollTimeout()
 	engine := poller.New(database, buildProviders(cfg), interval, timeout, cfg.Storage.RetentionDays)
 	collector := doctor.Collector{Config: cfg, ConfigPath: configPath, Version: version}
-	api := httpapi.New(engine, collector)
+	controller := control.New(
+		cfg.Providers.Claude.Binary,
+		runner.ExecRunner{},
+		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
+	)
+	api := httpapi.New(engine, collector, controller)
 	return &Runtime{database: database, engine: engine, handler: api.Handler()}, nil
 }
 

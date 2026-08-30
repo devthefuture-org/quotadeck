@@ -6,6 +6,7 @@ const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Mainloop = imports.mainloop;
 const PopupMenu = imports.ui.popupMenu;
+const Settings = imports.ui.settings;
 const Soup = imports.gi.Soup;
 const St = imports.gi.St;
 
@@ -20,8 +21,9 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this._session = new Soup.Session({ timeout: 12 });
         this._timeoutId = 0;
         this._serviceStartAttempted = false;
+        this._state = null;
 
-        this.set_applet_icon_path(GLib.build_filenamev([metadata.path, 'icon-symbolic.svg']));
+        this.set_applet_icon_symbolic_path(GLib.build_filenamev([metadata.path, 'icon-symbolic.svg']));
         this.set_applet_label('—');
         this.set_applet_tooltip(_('QuotaDeck is connecting to the local service'));
         this.actor.add_style_class_name('quotadeck-applet');
@@ -29,6 +31,11 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
         this.menuManager.addMenu(this.menu);
+
+        this._settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
+        this._settings.bind('display-account', 'displayAccountId', () => this._onDisplaySelectionChanged());
+        this._settings.bind('display-window', 'displayWindowId', () => this._onDisplaySelectionChanged());
+        this._lastDisplayAccountId = this.displayAccountId;
 
         this._renderLoading();
         this._loadState();
@@ -48,6 +55,7 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
             this._timeoutId = 0;
         }
         this._session.abort();
+        this._settings.finalize();
     }
 
     _loadState() {
@@ -58,6 +66,7 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
                 return;
             }
             this._serviceStartAttempted = false;
+            this._state = state;
             this._renderState(state);
         });
     }
@@ -119,31 +128,21 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
 
     _renderState(state) {
         const accounts = Array.isArray(state.accounts) ? state.accounts : [];
-        let tightest = null;
-        let stale = false;
+        this._refreshSettingsOptions(accounts);
+        const indicator = this._selectIndicator(accounts);
 
-        accounts.forEach(item => {
-            const snapshot = item.snapshot || {};
-            stale = stale || Boolean(snapshot.stale);
-            const windows = Array.isArray(snapshot.windows) ? snapshot.windows : [];
-            windows.forEach(window => {
-                const used = this._usedPercent(window);
-                if (used !== null && (tightest === null || used > tightest)) {
-                    tightest = used;
-                }
-            });
-        });
-
-        if (tightest === null) {
+        if (indicator === null) {
             this.set_applet_label('—');
+            const selectedItems = this._selectedAccounts(accounts);
+            const stale = selectedItems.some(item => Boolean((item.snapshot || {}).stale));
             this._setLevel(stale ? 'offline' : 'normal');
         } else {
-            this.set_applet_label(Math.round(tightest) + '%');
-            this._setLevel(tightest >= 90 ? 'critical' : tightest >= 75 ? 'warning' : 'normal');
+            this.set_applet_label(Math.round(indicator.used) + '%');
+            this._setLevel(indicator.used >= 90 ? 'critical' : indicator.used >= 75 ? 'warning' : 'normal');
         }
-        const summary = tightest === null
+        const summary = indicator === null
             ? _('No actionable quota window')
-            : Math.round(tightest) + _('% used in the tightest window');
+            : this._indicatorSummary(indicator);
         this.set_applet_tooltip('QuotaDeck · ' + summary);
 
         this.menu.removeAll();
@@ -154,6 +153,111 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         accounts.forEach(item => this._addAccount(item));
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addActions();
+    }
+
+    _onDisplaySelectionChanged() {
+        if (this.displayAccountId !== this._lastDisplayAccountId) {
+            this._lastDisplayAccountId = this.displayAccountId;
+            this.displayWindowId = 'auto';
+        }
+        if (this._state) {
+            this._renderState(this._state);
+        }
+    }
+
+    _refreshSettingsOptions(accounts) {
+        const accountOptions = {};
+        accountOptions[_('Automatic — tightest plan')] = 'auto';
+        accounts.forEach(item => {
+            const account = item.account || {};
+            if (!account.id) {
+                return;
+            }
+            const details = account.plan || account.providerId || _('unknown plan');
+            this._addOption(accountOptions, (account.label || account.id) + ' · ' + details, account.id);
+        });
+        if (this.displayAccountId !== 'auto' && !this._hasOptionValue(accountOptions, this.displayAccountId)) {
+            this._addOption(accountOptions, _('Unavailable account') + ' · ' + this.displayAccountId, this.displayAccountId);
+        }
+        this._setOptions('display-account', accountOptions);
+
+        const windowOptions = {};
+        windowOptions[_('Automatic — tightest indicator')] = 'auto';
+        const selected = accounts.find(item => (item.account || {}).id === this.displayAccountId);
+        if (selected) {
+            const windows = Array.isArray((selected.snapshot || {}).windows)
+                ? selected.snapshot.windows
+                : [];
+            windows.forEach(window => {
+                if (window.id) {
+                    this._addOption(windowOptions, window.label || window.id, window.id);
+                }
+            });
+        }
+        if (this.displayWindowId !== 'auto' && !this._hasOptionValue(windowOptions, this.displayWindowId)) {
+            this._addOption(windowOptions, _('Unavailable indicator') + ' · ' + this.displayWindowId, this.displayWindowId);
+        }
+        this._setOptions('display-window', windowOptions);
+    }
+
+    _hasOptionValue(options, value) {
+        return Object.keys(options).some(label => options[label] === value);
+    }
+
+    _setOptions(key, options) {
+        const current = this._settings.getOptions(key);
+        if (JSON.stringify(current) !== JSON.stringify(options)) {
+            this._settings.setOptions(key, options);
+        }
+    }
+
+    _addOption(options, label, value) {
+        let candidate = label;
+        let suffix = 2;
+        while (Object.prototype.hasOwnProperty.call(options, candidate)) {
+            candidate = label + ' (' + suffix + ')';
+            suffix += 1;
+        }
+        options[candidate] = value;
+    }
+
+    _selectedAccounts(accounts) {
+        if (!this.displayAccountId || this.displayAccountId === 'auto') {
+            return accounts;
+        }
+        return accounts.filter(item => (item.account || {}).id === this.displayAccountId);
+    }
+
+    _selectIndicator(accounts) {
+        const selectedItems = this._selectedAccounts(accounts);
+        let best = null;
+        selectedItems.forEach(item => {
+            const windows = Array.isArray((item.snapshot || {}).windows)
+                ? item.snapshot.windows
+                : [];
+            windows.forEach(window => {
+                if (this.displayAccountId !== 'auto'
+                    && this.displayWindowId
+                    && this.displayWindowId !== 'auto'
+                    && window.id !== this.displayWindowId) {
+                    return;
+                }
+                const used = this._usedPercent(window);
+                if (used !== null && (best === null || used > best.used)) {
+                    best = { item, window, used };
+                }
+            });
+        });
+        return best;
+    }
+
+    _indicatorSummary(indicator) {
+        const account = indicator.item.account || {};
+        const plan = account.plan || account.label || account.providerId;
+        const windowLabel = indicator.window.label || indicator.window.id;
+        const details = [plan, windowLabel].filter(Boolean).join(' · ');
+        const used = Math.round(indicator.used) + _('% used');
+        return details ? used + ' · ' + details : used;
     }
 
     _addAccount(item) {
@@ -192,6 +296,10 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
             this._request('POST', '/api/v1/refresh', { 'X-QuotaDeck-Request': 'refresh' }, () => this._loadState());
         });
         this.menu.addMenuItem(refresh);
+
+        const configure = new PopupMenu.PopupIconMenuItem(_('Configure panel indicator'), 'preferences-system-symbolic', St.IconType.SYMBOLIC);
+        configure.connect('activate', () => this.configureApplet());
+        this.menu.addMenuItem(configure);
     }
 
     _openDashboard() {

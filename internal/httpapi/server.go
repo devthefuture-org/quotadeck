@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
+	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/poller"
 )
 
@@ -21,14 +24,25 @@ import (
 var uiFiles embed.FS
 
 type Server struct {
-	engine    *poller.Engine
-	doctor    doctor.Collector
-	startedAt time.Time
-	handler   http.Handler
+	engine     *poller.Engine
+	doctor     doctor.Collector
+	controller Controller
+	startedAt  time.Time
+	handler    http.Handler
 }
 
-func New(engine *poller.Engine, collector doctor.Collector) *Server {
-	server := &Server{engine: engine, doctor: collector, startedAt: time.Now().UTC()}
+type Controller interface {
+	Status(states []domain.AccountState) control.Status
+	SwitchClaude(ctx context.Context, accountID string) error
+	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
+}
+
+func New(engine *poller.Engine, collector doctor.Collector, controllers ...Controller) *Server {
+	var controller Controller
+	if len(controllers) > 0 {
+		controller = controllers[0]
+	}
+	server := &Server{engine: engine, doctor: collector, controller: controller, startedAt: time.Now().UTC()}
 	server.handler = server.routes()
 	return server
 }
@@ -45,6 +59,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/doctor", s.doctorReport)
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("POST /api/v1/refresh", s.refresh)
+	mux.HandleFunc("GET /api/v1/control", s.controlStatus)
+	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
+	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
 	mux.Handle("/", spaHandler())
 	return securityHeaders(mux)
 }
@@ -160,6 +177,132 @@ func (s *Server) refresh(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "completed"})
+}
+
+func (s *Server) controlStatus(writer http.ResponseWriter, request *http.Request) {
+	if s.controller == nil {
+		writeError(writer, http.StatusServiceUnavailable, "control_unavailable", "provider controls are unavailable")
+		return
+	}
+	states, err := s.engine.Current(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "state_unavailable", "state is temporarily unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, s.controller.Status(states))
+}
+
+func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		AccountID string `json:"accountId"`
+	}
+	if err := decodeJSON(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain a valid accountId")
+		return
+	}
+	states, err := s.engine.Current(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "state_unavailable", "state is temporarily unavailable")
+		return
+	}
+	found := false
+	for _, state := range states {
+		if state.Account.ID == input.AccountID && state.Account.ProviderID == "claude" && !state.Account.Disabled {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(writer, http.StatusBadRequest, "invalid_account", "select an available Claude account")
+		return
+	}
+	if err := s.controller.SwitchClaude(request.Context(), input.AccountID); err != nil {
+		if errors.Is(err, control.ErrInvalidAccount) {
+			writeError(writer, http.StatusBadRequest, "invalid_account", "select an available Claude account")
+			return
+		}
+		writeError(writer, http.StatusBadGateway, "switch_failed", "cswap could not activate this Claude account")
+		return
+	}
+	s.writeControlResult(writer, request)
+}
+
+func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		APIKey   string `json:"apiKey"`
+		Activate bool   `json:"activate"`
+	}
+	if err := decodeJSON(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain a valid Z.ai configuration")
+		return
+	}
+	if err := s.controller.ConfigureZAI(request.Context(), input.APIKey, input.Activate); err != nil {
+		switch {
+		case errors.Is(err, control.ErrInvalidKey):
+			writeError(writer, http.StatusBadRequest, "invalid_api_key", "the Z.ai API key format is invalid")
+		case errors.Is(err, control.ErrZAINotConfigured):
+			writeError(writer, http.StatusConflict, "zai_not_configured", "enter a Z.ai API key before selecting the plan")
+		default:
+			writeError(writer, http.StatusInternalServerError, "configuration_failed", "the Z.ai configuration could not be saved")
+		}
+		return
+	}
+	s.writeControlResult(writer, request)
+}
+
+func (s *Server) controlRequestAllowed(writer http.ResponseWriter, request *http.Request) bool {
+	if s.controller == nil {
+		writeError(writer, http.StatusServiceUnavailable, "control_unavailable", "provider controls are unavailable")
+		return false
+	}
+	if !isLoopbackRequest(request) {
+		writeError(writer, http.StatusForbidden, "local_only", "provider controls are available from loopback only")
+		return false
+	}
+	if request.Header.Get("X-QuotaDeck-Request") != "control" {
+		writeError(writer, http.StatusForbidden, "csrf_guard", "missing provider control request header")
+		return false
+	}
+	return true
+}
+
+func (s *Server) writeControlResult(writer http.ResponseWriter, request *http.Request) {
+	refreshStatus := "completed"
+	if err := s.engine.Refresh(request.Context()); err != nil {
+		if errors.Is(err, poller.ErrRefreshInProgress) {
+			refreshStatus = "in_progress"
+		} else {
+			refreshStatus = "completed_with_errors"
+		}
+	}
+	states, err := s.engine.Current(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "state_unavailable", "the selection changed but state is temporarily unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": "selected", "refresh": refreshStatus, "control": s.controller.Status(states),
+	})
+}
+
+func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) error {
+	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
 }
 
 func spaHandler() http.Handler {

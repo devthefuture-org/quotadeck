@@ -6,8 +6,10 @@ QuotaDeck is local-first and sends no telemetry.
 
 - HTTP binds only to `127.0.0.1`, `::1`, or `localhost`.
 - Provider secrets are excluded from domain objects, SQLite, API responses, logs, fixtures, and diagnostics.
-- Claude credentials remain managed by `cswap`; Codex credentials remain managed by Codex CLI.
+- Claude credentials remain managed by `cswap`; plan selection invokes only its public `switch` command. Codex credentials remain managed by Codex CLI.
 - Z.ai bearer credentials are attached only to validated HTTPS quota URLs.
+- Plan-control mutations are loopback-only, require an explicit anti-CSRF header, and never return stored keys.
+- Z.ai UI setup writes only the private QuotaDeck environment file and the documented Claude Code environment keys in `~/.claude/settings.json`; unrelated settings are preserved.
 - Persisted errors pass through redaction before storage.
 - Browser responses include a restrictive Content Security Policy and frame denial.
 

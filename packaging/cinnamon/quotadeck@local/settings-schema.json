@@ -1,0 +1,24 @@
+{
+  "indicator-header": {
+    "type": "header",
+    "description": "Panel indicator"
+  },
+  "display-account": {
+    "type": "combobox",
+    "default": "auto",
+    "description": "Plan / account",
+    "tooltip": "Choose which subscription account is represented in the panel.",
+    "options": {
+      "Automatic — tightest plan": "auto"
+    }
+  },
+  "display-window": {
+    "type": "combobox",
+    "default": "auto",
+    "description": "Indicator",
+    "tooltip": "Choose a quota window from the selected account. Automatic shows its most consumed window.",
+    "options": {
+      "Automatic — tightest indicator": "auto"
+    }
+  }
+}

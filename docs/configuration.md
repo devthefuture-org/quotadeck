@@ -50,21 +50,20 @@ providers:
         keyEnv: ZAI_TEAM_API_KEY
 ```
 
-For a persistent user service, create a private environment file and reference it from a systemd override:
+The packaged user service automatically reads this optional private environment file:
+
+```text
+~/.config/quotadeck/environment
+```
+
+Create it with restrictive permissions:
 
 ```bash
-install -m 600 /dev/null ~/.config/quotadeck/secrets.env
-systemctl --user edit quotadeck.service
+install -d -m 700 ~/.config/quotadeck
+install -m 600 /dev/null ~/.config/quotadeck/environment
 ```
 
-Add:
-
-```ini
-[Service]
-EnvironmentFile=%h/.config/quotadeck/secrets.env
-```
-
-Then put `ZAI_TEAM_API_KEY=...` in that file and restart the service:
+Put `ZAI_TEAM_API_KEY=...` in that file and restart the service:
 
 ```bash
 systemctl --user daemon-reload
@@ -72,3 +71,14 @@ systemctl --user restart quotadeck.service
 ```
 
 Keep the file outside source control and readable only by your user.
+When running `quotadeck serve` directly, expose the same variables in the process environment.
+
+## Dashboard configuration
+
+The **Plans** screen provides the same setup without editing files manually:
+
+- **Save key** updates `ZAI_API_KEY` in the private QuotaDeck environment file;
+- **Save & use Z.ai** also configures `~/.claude/settings.json` for the official Z.ai Anthropic endpoint;
+- choosing a Claude account removes the active Z.ai routing keys and runs `cswap switch` for the selected slot.
+
+QuotaDeck never includes a stored key in API responses, diagnostics, logs, or SQLite. Leaving the key field blank keeps the already stored value.

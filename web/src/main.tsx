@@ -40,6 +40,11 @@ type Snapshot = {
 }
 type AccountState = { account: Account; snapshot: Snapshot }
 type StateResponse = { generatedAt: string; providers: Provider[]; accounts: AccountState[] }
+type ControlState = {
+  mode: 'claude' | 'zai' | 'unknown'
+  claude: { available: boolean; activeAccountId?: string }
+  zai: { configured: boolean; active: boolean; endpoint: string }
+}
 type DoctorReport = {
   version: string
   generatedAt: string
@@ -59,14 +64,19 @@ function App() {
   const [accountFilter, setAccountFilter] = useState('all')
   const [mode, setMode] = useState<'used' | 'remaining'>('used')
   const [refreshing, setRefreshing] = useState(false)
-  const [showDoctor, setShowDoctor] = useState(false)
+  const [view, setView] = useState<'dashboard' | 'plans' | 'diagnostics'>('dashboard')
+  const [control, setControl] = useState<ControlState | null>(null)
   const [now, setNow] = useState(Date.now())
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch('/api/v1/state', { cache: 'no-store' })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      setState(await response.json() as StateResponse)
+      const [stateResponse, controlResponse] = await Promise.all([
+        fetch('/api/v1/state', { cache: 'no-store' }),
+        fetch('/api/v1/control', { cache: 'no-store' }),
+      ])
+      if (!stateResponse.ok) throw new Error(`HTTP ${stateResponse.status}`)
+      setState(await stateResponse.json() as StateResponse)
+      setControl(controlResponse.ok ? await controlResponse.json() as ControlState : null)
       setError('')
     } catch {
       setError('QuotaDeck cannot reach its local API.')
@@ -140,14 +150,17 @@ function App() {
           <div><p class="eyebrow">Local quota intelligence</p><h1>QuotaDeck</h1></div>
         </div>
         <div class="top-actions">
-          <button class="quiet-button" onClick={() => setShowDoctor(value => !value)}>{showDoctor ? 'Dashboard' : 'Diagnostics'}</button>
+          <button class={`quiet-button ${view === 'plans' ? 'selected' : ''}`} onClick={() => setView(value => value === 'plans' ? 'dashboard' : 'plans')}>{view === 'plans' ? 'Dashboard' : 'Plans'}</button>
+          <button class={`quiet-button ${view === 'diagnostics' ? 'selected' : ''}`} onClick={() => setView(value => value === 'diagnostics' ? 'dashboard' : 'diagnostics')}>{view === 'diagnostics' ? 'Dashboard' : 'Diagnostics'}</button>
           <button class="refresh-button" aria-label={refreshing ? 'Refreshing quotas' : 'Refresh quotas'} onClick={() => void refresh()} disabled={refreshing}>
             <span class={refreshing ? 'refresh-icon spinning' : 'refresh-icon'}>↻</span><span class="refresh-label">{refreshing ? 'Refreshing' : 'Refresh'}</span>
           </button>
         </div>
       </header>
 
-      {showDoctor ? <Diagnostics /> : (
+      {view === 'diagnostics' ? <Diagnostics /> : view === 'plans' ? (
+        <ControlCenter state={state} control={control} onChanged={load} />
+      ) : (
         <main>
           <section class="hero">
             <div>
@@ -191,7 +204,17 @@ function App() {
                   <div><p>{providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
                 <div class="card-grid">
-                  {items.map(item => <AccountCard key={item.account.id} state={item} mode={mode} now={now} />)}
+                  {items.map(item => <AccountCard
+                    key={item.account.id}
+                    state={item}
+                    mode={mode}
+                    now={now}
+                    selected={control == null
+                      ? item.account.active
+                      : item.account.providerId === 'claude'
+                        ? control.mode === 'claude' && control.claude.activeAccountId === item.account.id
+                        : item.account.providerId === 'zai' && control.mode === 'zai'}
+                  />)}
                 </div>
               </section>
             ))}
@@ -201,7 +224,7 @@ function App() {
             <section class="empty-state">
               <span>◇</span><h3>No quota source detected yet</h3>
               <p>Open diagnostics to see which local tools, homes, and environment references QuotaDeck considered.</p>
-              <button class="refresh-button" onClick={() => setShowDoctor(true)}>Open diagnostics</button>
+              <button class="refresh-button" onClick={() => setView('diagnostics')}>Open diagnostics</button>
             </section>
           )}
         </main>
@@ -212,7 +235,7 @@ function App() {
   )
 }
 
-function AccountCard({ state, mode, now }: { state: AccountState; mode: 'used' | 'remaining'; now: number }) {
+function AccountCard({ state, mode, now, selected }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean }) {
   const { account, snapshot } = state
   const windows = [...(snapshot.windows ?? [])].sort((left, right) => {
     if (!left.resetsAt) return 1
@@ -229,7 +252,7 @@ function AccountCard({ state, mode, now }: { state: AccountState; mode: 'used' |
         <div>
           <div class="badges">
             {account.plan && <span class="plan-badge">{account.plan}</span>}
-            {account.active && <span class="active-badge"><i /> active</span>}
+            {selected && <span class="active-badge"><i /> selected</span>}
             {account.disabled && <span class="disabled-badge">disabled</span>}
           </div>
           <h3>{account.label}</h3>
@@ -245,6 +268,119 @@ function AccountCard({ state, mode, now }: { state: AccountState; mode: 'used' |
         {windows.length === 0 && <p class="no-windows">No actionable quota window is available.</p>}
       </div>
     </article>
+  )
+}
+
+function ControlCenter({ state, control, onChanged }: { state: StateResponse | null; control: ControlState | null; onChanged: () => Promise<void> }) {
+  const [apiKey, setAPIKey] = useState('')
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const claudeAccounts = state?.accounts.filter(item => item.account.providerId === 'claude') ?? []
+
+  async function request(path: string, method: string, body: unknown, busyKey: string) {
+    setBusy(busyKey)
+    setMessage('')
+    setError('')
+    try {
+      const response = await fetch(path, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-QuotaDeck-Request': 'control' },
+        body: JSON.stringify(body),
+      })
+      const payload = await response.json().catch(() => null) as { refresh?: string; error?: { message?: string } } | null
+      if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
+      setAPIKey('')
+      setMessage(payload?.refresh === 'completed_with_errors'
+        ? 'Plan selection saved, but at least one quota source could not be verified. Check its card for details.'
+        : 'Plan selection updated. New Claude Code sessions will use it.')
+      await onChanged()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'The plan selection could not be updated.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  function selectClaude(accountId: string) {
+    return request('/api/v1/control/claude/switch', 'POST', { accountId }, accountId)
+  }
+
+  function configureZAI(activate: boolean) {
+    return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save')
+  }
+
+  return (
+    <main class="plan-control">
+      <section class="hero compact control-hero">
+        <div>
+          <p class="kicker">Claude Code routing</p>
+          <h2>Pick the plan for<br />your next session.</h2>
+        </div>
+        <div class="current-plan">
+          <span>Selected now</span>
+          <strong>{control?.mode === 'zai' ? 'Z.ai · GLM Coding Plan' : control?.mode === 'claude' ? 'Claude subscription' : 'No plan detected'}</strong>
+          <small>Already-running Claude Code sessions keep their current environment.</small>
+        </div>
+      </section>
+
+      {message && <div class="notice success" role="status">{message}</div>}
+      {error && <div class="notice" role="alert">{error}</div>}
+
+      <div class="plan-layout">
+        <section class="plan-panel">
+          <div class="plan-heading">
+            <div><span class="provider-glyph claude">C</span><div><p>Claude subscriptions</p><small>Managed safely by cswap</small></div></div>
+            <span class={`availability ${control?.claude.available ? 'ok' : ''}`}>{control?.claude.available ? 'cswap ready' : 'cswap unavailable'}</span>
+          </div>
+          <div class="plan-options">
+            {claudeAccounts.map(item => {
+              const selected = control?.mode === 'claude' && control.claude.activeAccountId === item.account.id
+              return <div class={`plan-option ${selected ? 'selected' : ''}`} key={item.account.id}>
+                <div>
+                  <span>{item.account.plan || 'Claude plan'}</span>
+                  <strong>{item.account.label}</strong>
+                  <small>cswap slot {item.account.sourceMeta?.slot ?? '—'}{item.account.disabled ? ' · disabled' : ''}</small>
+                </div>
+                <button
+                  class={selected ? 'selected-plan-button' : 'plan-button'}
+                  disabled={selected || item.account.disabled || busy !== '' || !control?.claude.available}
+                  onClick={() => void selectClaude(item.account.id)}
+                >{selected ? 'Selected' : busy === item.account.id ? 'Switching…' : 'Use plan'}</button>
+              </div>
+            })}
+            {claudeAccounts.length === 0 && <p class="control-empty">No cswap account is available yet.</p>}
+          </div>
+        </section>
+
+        <section class={`plan-panel zai-panel ${control?.mode === 'zai' ? 'selected' : ''}`}>
+          <div class="plan-heading">
+            <div><span class="provider-glyph zai">Z</span><div><p>Z.ai</p><small>GLM Coding Plan for Claude Code</small></div></div>
+            <span class={`availability ${control?.zai.configured ? 'ok' : ''}`}>{control?.zai.configured ? 'key stored' : 'setup needed'}</span>
+          </div>
+          <div class="zai-form">
+            <label for="zai-api-key">Z.ai API key</label>
+            <input
+              id="zai-api-key"
+              type="password"
+              value={apiKey}
+              autoComplete="new-password"
+              placeholder={control?.zai.configured ? 'Key already stored — leave blank to keep it' : 'Paste your Z.ai API key'}
+              onInput={event => setAPIKey(event.currentTarget.value)}
+            />
+            <p>The key stays in private local files and is never returned to this page. QuotaDeck configures the official Anthropic endpoint <code>{control?.zai.endpoint ?? 'https://api.z.ai/api/anthropic'}</code>.</p>
+            <div class="zai-actions">
+              <button class="quiet-button" disabled={busy !== '' || apiKey.trim() === ''} onClick={() => void configureZAI(false)}>{busy === 'zai-save' ? 'Saving…' : 'Save key'}</button>
+              <button class="refresh-button" disabled={busy !== '' || (!control?.zai.configured && apiKey.trim() === '') || (control?.mode === 'zai' && apiKey.trim() === '')} onClick={() => void configureZAI(true)}>
+                {busy === 'zai-activate' ? 'Configuring…' : control?.mode === 'zai' ? (apiKey.trim() === '' ? 'Selected' : 'Update active key') : 'Save & use Z.ai'}
+              </button>
+            </div>
+            <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" rel="noreferrer">Open Z.ai API key management ↗</a>
+          </div>
+        </section>
+      </div>
+      <p class="control-note">Switching affects new Claude Code processes. QuotaDeck preserves unrelated Claude settings and never opens the cswap credential store.</p>
+    </main>
   )
 }
 

@@ -26,6 +26,8 @@
 
 QuotaDeck models `provider → accounts → windows[]`, so new provider-defined windows flow through storage, API, and UI without a `session`/`weekly` hard-code. The daemon binds to loopback, embeds its Preact frontend in one Go binary, stores history in SQLite WAL, streams updates with Server-Sent Events, and sends no telemetry.
 
+The **Plans** screen also controls which subscription new Claude Code sessions use: select any managed Claude account through `cswap`, or configure and activate a Z.ai GLM Coding Plan without editing JSON by hand.
+
 ## Install
 
 Download the latest assets from [GitHub Releases](https://github.com/devthefuture-org/quotadeck/releases/latest).
@@ -49,9 +51,9 @@ See the [installation guide](https://devthefuture-org.github.io/quotadeck/gettin
 
 ## Providers
 
-- **Claude:** `cswap list --json` is the canonical multi-account source. QuotaDeck never calls `cswap export`, opens its credential store, or refreshes Claude OAuth itself.
+- **Claude:** `cswap list --json` is the canonical multi-account source. Explicit plan selection calls `cswap switch <slot> --json`; QuotaDeck never calls `cswap export`, opens its credential store, or refreshes Claude OAuth itself.
 - **Codex:** one `codex app-server --stdio` process per configured `CODEX_HOME` reads account and rate-limit metadata. QuotaDeck does not read or modify `auth.json`.
-- **Z.ai:** explicit environment references, `ZAI_API_KEY`, `GLM_API_KEY`, and recognized Z.ai entries in Claude settings. Tokens stay in memory and are deduplicated with a truncated in-memory SHA-256 fingerprint.
+- **Z.ai:** explicit environment references, `ZAI_API_KEY`, `GLM_API_KEY`, and recognized Z.ai entries in Claude settings. Tokens never enter the domain model, database, diagnostics, logs, or API responses; in-memory sources are deduplicated with a truncated SHA-256 fingerprint.
 
 Full setup instructions live in the [provider guide](https://devthefuture-org.github.io/quotadeck/providers).
 
@@ -93,10 +95,13 @@ GET  /api/v1/accounts/{id}/history?from=&to=
 GET  /api/v1/health
 GET  /api/v1/doctor
 GET  /api/v1/events
+GET  /api/v1/control
 POST /api/v1/refresh
+POST /api/v1/control/claude/switch
+PUT  /api/v1/control/zai
 ```
 
-Manual refresh is loopback-only and requires QuotaDeck's explicit request header. Errors are redacted before persistence; temporary failures keep the last valid windows visible as stale.
+Manual refresh and plan changes are loopback-only and require QuotaDeck's explicit request header. Errors are redacted before persistence; temporary failures keep the last valid windows visible as stale. Control responses expose only secret-presence booleans, never key values.
 
 ## Packaging
 

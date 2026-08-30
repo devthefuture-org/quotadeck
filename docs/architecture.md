@@ -10,6 +10,9 @@ provider → accounts → windows[]
       │
       ├── SQLite WAL history
       ├── loopback JSON API + SSE
+      ├── provider control boundary
+      │        ├── cswap switch
+      │        └── private Z.ai / Claude settings
       └── embedded Preact dashboard
                ├── browser
                ├── Wails desktop
@@ -33,6 +36,9 @@ See [ADR 0002](./adr/0002-domain-model) for the decision record.
 | `GET` | `/api/v1/health` | Service health |
 | `GET` | `/api/v1/doctor` | Redacted diagnostics |
 | `GET` | `/api/v1/events` | Server-Sent Events stream |
+| `GET` | `/api/v1/control` | Redacted active-plan status |
 | `POST` | `/api/v1/refresh` | Loopback-only manual refresh |
+| `POST` | `/api/v1/control/claude/switch` | Activate a validated cswap account |
+| `PUT` | `/api/v1/control/zai` | Save and optionally activate Z.ai |
 
-Refresh requests require the explicit `X-QuotaDeck-Request: refresh` header in addition to loopback origin checks.
+Refresh requests require `X-QuotaDeck-Request: refresh`. Plan mutations require `X-QuotaDeck-Request: control`. Both enforce loopback origin checks; control request bodies are size-limited and reject unknown fields.
