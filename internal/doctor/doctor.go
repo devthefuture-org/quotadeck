@@ -81,15 +81,13 @@ func (c Collector) zaiSources() []SourceCheck {
 		}
 		checks = append(checks, SourceCheck{Provider: "zai", Source: "environment", Accepted: c.Config.Providers.ZAI.Enabled && present, Reason: reason, Metadata: map[string]string{"keyEnv": account.KeyEnv, "secretPresent": boolString(present)}})
 	}
-	if len(c.Config.Providers.ZAI.Accounts) == 0 {
-		for _, key := range []string{"ZAI_API_KEY", "GLM_API_KEY"} {
-			present := strings.TrimSpace(os.Getenv(key)) != ""
-			reason := presentReason(present)
-			if !c.Config.Providers.ZAI.Enabled {
-				reason = "provider disabled"
-			}
-			checks = append(checks, SourceCheck{Provider: "zai", Source: "environment", Accepted: c.Config.Providers.ZAI.Enabled && present, Reason: reason, Metadata: map[string]string{"keyEnv": key, "secretPresent": boolString(present)}})
+	for _, key := range []string{"ZAI_API_KEY", "GLM_API_KEY"} {
+		present := strings.TrimSpace(os.Getenv(key)) != ""
+		reason := presentReason(present)
+		if !c.Config.Providers.ZAI.Enabled {
+			reason = "provider disabled"
 		}
+		checks = append(checks, SourceCheck{Provider: "zai", Source: "environment", Accepted: c.Config.Providers.ZAI.Enabled && present, Reason: reason, Metadata: map[string]string{"keyEnv": key, "secretPresent": boolString(present)}})
 	}
 	paths := append([]string(nil), c.Config.Providers.ZAI.SettingsPaths...)
 	if len(paths) == 0 {

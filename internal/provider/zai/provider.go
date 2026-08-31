@@ -85,24 +85,25 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 			},
 		})
 	}
-	if len(p.config.Accounts) == 0 {
-		for _, keyRef := range []string{"ZAI_API_KEY", "GLM_API_KEY"} {
-			token := strings.TrimSpace(os.Getenv(keyRef))
-			if token == "" {
-				continue
-			}
-			region := "global"
-			if keyRef == "GLM_API_KEY" {
-				region = "china"
-			}
-			ref := "env:" + keyRef
-			items = append(items, discovered{
-				candidate: candidate(ref, "Z.ai", "environment", map[string]string{
-					"keyEnv": keyRef, "region": region, "secretPresent": "true",
-				}),
-				secret: secret{Token: token, Region: region},
-			})
+	// UI-managed keys remain valid even when advanced explicit accounts are
+	// configured. Explicit entries are appended first and win deduplication,
+	// preserving their labels and optional organization/workspace metadata.
+	for _, keyRef := range []string{"ZAI_API_KEY", "GLM_API_KEY"} {
+		token := strings.TrimSpace(os.Getenv(keyRef))
+		if token == "" {
+			continue
 		}
+		region := "global"
+		if keyRef == "GLM_API_KEY" {
+			region = "china"
+		}
+		ref := "env:" + keyRef
+		items = append(items, discovered{
+			candidate: candidate(ref, "Z.ai", "environment", map[string]string{
+				"keyEnv": keyRef, "region": region, "secretPresent": "true",
+			}),
+			secret: secret{Token: token, Region: region},
+		})
 	}
 	settingsPaths := append([]string(nil), p.config.SettingsPaths...)
 	if len(settingsPaths) == 0 {

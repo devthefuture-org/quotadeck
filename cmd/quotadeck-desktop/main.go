@@ -11,6 +11,7 @@ import (
 
 	"github.com/devthefuture-org/quotadeck/internal/application"
 	"github.com/devthefuture-org/quotadeck/internal/config"
+	"github.com/devthefuture-org/quotadeck/internal/control"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -35,11 +36,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("quotadeck-desktop: load configuration: %v", err)
 	}
-	appRuntime, err := application.New(cfg, configPath, version)
-	if err != nil {
-		log.Fatalf("quotadeck-desktop: start runtime: %v", err)
+	var appRuntime *application.Runtime
+	var handler http.Handler
+	if daemonHandler, ok := attachDaemon(cfg); ok {
+		handler = daemonHandler
+	} else {
+		// AppImage and non-systemd environments keep working as a standalone
+		// application. Load the same private environment file as the packaged
+		// user service so provider discovery does not depend on launch context.
+		paths := control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths)
+		if err := loadManagedEnvironment(paths.Environment); err != nil {
+			log.Printf("quotadeck-desktop: load managed environment: %v", err)
+		}
+		appRuntime, err = application.New(cfg, configPath, version)
+		if err != nil {
+			log.Fatalf("quotadeck-desktop: start fallback runtime: %v", err)
+		}
+		handler = trustedDesktopHandler(appRuntime.Handler())
 	}
-	defer appRuntime.Close()
+	if appRuntime != nil {
+		defer appRuntime.Close()
+	}
 	app := &desktopApp{runtime: appRuntime}
 
 	err = wails.Run(&options.App{
@@ -50,7 +67,7 @@ func main() {
 		MinHeight: 560,
 		AssetServer: &assetserver.Options{
 			Assets:  nil,
-			Handler: trustedDesktopHandler(appRuntime.Handler()),
+			Handler: handler,
 		},
 		EnableDefaultContextMenu: true,
 		BackgroundColour:         &options.RGBA{R: 17, G: 19, B: 15, A: 255},
@@ -67,12 +84,16 @@ func main() {
 }
 
 func (a *desktopApp) onStartup(ctx context.Context) {
-	a.runtime.Start(ctx)
+	if a.runtime != nil {
+		a.runtime.Start(ctx)
+	}
 }
 
 func (a *desktopApp) onShutdown(_ context.Context) {
-	if err := a.runtime.Close(); err != nil {
-		log.Printf("quotadeck-desktop: close runtime: %v", err)
+	if a.runtime != nil {
+		if err := a.runtime.Close(); err != nil {
+			log.Printf("quotadeck-desktop: close runtime: %v", err)
+		}
 	}
 }
 

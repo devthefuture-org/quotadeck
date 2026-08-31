@@ -54,3 +54,18 @@ func TestDiscoveryNeverExportsToken(t *testing.T) {
 		t.Fatal("credential escaped into a discovery candidate")
 	}
 }
+
+func TestDiscoverIncludesManagedDefaultAlongsideExplicitAccounts(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "managed-default-token")
+	t.Setenv("MISSING_EXPLICIT_KEY", "")
+	cfg := config.Default().Providers.ZAI
+	cfg.Accounts = []config.ZAIAccountConfig{{Label: "Unavailable team", KeyEnv: "MISSING_EXPLICIT_KEY"}}
+
+	accounts, err := New(cfg).Discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 || accounts[0].SourceMeta["keyEnv"] != "ZAI_API_KEY" {
+		t.Fatalf("expected UI-managed ZAI_API_KEY fallback, got %#v", accounts)
+	}
+}

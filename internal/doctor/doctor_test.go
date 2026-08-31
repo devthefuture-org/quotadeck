@@ -43,3 +43,21 @@ func TestDisabledProvidersNeverAcceptSources(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedZAIKeyIsReportedWithExplicitAccounts(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "managed-doctor-secret")
+	t.Setenv("TEAM_ZAI_KEY", "")
+	cfg := config.Default()
+	cfg.Providers.ZAI.Accounts = []config.ZAIAccountConfig{{Label: "Team", KeyEnv: "TEAM_ZAI_KEY"}}
+
+	report := (Collector{Config: cfg, Version: "test"}).Collect(t.Context())
+	found := false
+	for _, source := range report.Sources {
+		if source.Provider == "zai" && source.Metadata["keyEnv"] == "ZAI_API_KEY" {
+			found = source.Accepted && source.Metadata["secretPresent"] == "true"
+		}
+	}
+	if !found {
+		t.Fatal("doctor did not report the managed ZAI_API_KEY fallback")
+	}
+}
