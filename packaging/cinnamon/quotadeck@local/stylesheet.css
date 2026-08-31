@@ -11,6 +11,10 @@
     color: #f4c95d;
 }
 
+.quotadeck-reconnecting .applet-label {
+    color: #f4c95d;
+}
+
 .quotadeck-critical .applet-label {
     color: #ff7a6e;
 }

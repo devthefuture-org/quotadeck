@@ -1,7 +1,7 @@
 {
   "uuid": "quotadeck@local",
   "name": "QuotaDeck",
-  "description": "Shows a configurable local AI quota window in the Cinnamon panel.",
+  "description": "Shows configurable AI quota indicators in the Cinnamon panel. Add one instance per indicator.",
   "icon": "quotadeck",
-  "max-instances": 1
+  "max-instances": -1
 }

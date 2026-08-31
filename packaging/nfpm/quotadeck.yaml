@@ -29,7 +29,15 @@ contents:
     dst: /usr/share/cinnamon/applets/quotadeck@local/metadata.json
   - src: ./packaging/cinnamon/quotadeck@local/stylesheet.css
     dst: /usr/share/cinnamon/applets/quotadeck@local/stylesheet.css
+  - src: ./packaging/cinnamon/quotadeck@local/settings-schema.json
+    dst: /usr/share/cinnamon/applets/quotadeck@local/settings-schema.json
   - src: ./packaging/cinnamon/quotadeck@local/icon-symbolic.svg
     dst: /usr/share/cinnamon/applets/quotadeck@local/icon-symbolic.svg
+  - src: ./packaging/cinnamon/quotadeck@local/icon-claude-symbolic.svg
+    dst: /usr/share/cinnamon/applets/quotadeck@local/icon-claude-symbolic.svg
+  - src: ./packaging/cinnamon/quotadeck@local/icon-codex-symbolic.svg
+    dst: /usr/share/cinnamon/applets/quotadeck@local/icon-codex-symbolic.svg
+  - src: ./packaging/cinnamon/quotadeck@local/icon-zai-symbolic.svg
+    dst: /usr/share/cinnamon/applets/quotadeck@local/icon-zai-symbolic.svg
   - src: ./LICENSE
     dst: /usr/share/doc/quotadeck/copyright

@@ -1,7 +1,7 @@
 {
   "indicator-header": {
     "type": "header",
-    "description": "Panel indicator"
+    "description": "Panel indicator · add another QuotaDeck applet for more"
   },
   "display-account": {
     "type": "combobox",

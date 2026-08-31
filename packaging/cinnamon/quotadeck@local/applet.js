@@ -12,6 +12,9 @@ const St = imports.gi.St;
 
 const API_ROOT = 'http://127.0.0.1:9211';
 const POLL_SECONDS = 60;
+const RETRY_SECONDS = 5;
+const OFFLINE_FAILURE_THRESHOLD = 3;
+const SERVICE_START_COOLDOWN_SECONDS = 30;
 
 class QuotaDeckApplet extends Applet.TextIconApplet {
     constructor(metadata, orientation, panelHeight, instanceId) {
@@ -20,7 +23,10 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this._metadata = metadata;
         this._session = new Soup.Session({ timeout: 12 });
         this._timeoutId = 0;
-        this._serviceStartAttempted = false;
+        this._retryId = 0;
+        this._requestInFlight = false;
+        this._consecutiveFailures = 0;
+        this._serviceStartAttemptedAt = 0;
         this._state = null;
 
         this.set_applet_icon_symbolic_path(GLib.build_filenamev([metadata.path, 'icon-symbolic.svg']));
@@ -54,20 +60,52 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
             Mainloop.source_remove(this._timeoutId);
             this._timeoutId = 0;
         }
+        if (this._retryId) {
+            Mainloop.source_remove(this._retryId);
+            this._retryId = 0;
+        }
         this._session.abort();
         this._settings.finalize();
     }
 
     _loadState() {
+        if (this._requestInFlight) {
+            return;
+        }
+        this._requestInFlight = true;
         this._request('GET', '/api/v1/state', null, (error, state) => {
+            this._requestInFlight = false;
             if (error) {
-                this._renderOffline();
+                this._consecutiveFailures += 1;
+                if (!this._state || this._consecutiveFailures >= OFFLINE_FAILURE_THRESHOLD) {
+                    this._renderOffline();
+                } else {
+                    this._renderReconnecting();
+                }
                 this._startServiceOnce();
+                this._scheduleRetry();
                 return;
             }
-            this._serviceStartAttempted = false;
+            this._consecutiveFailures = 0;
+            this._serviceStartAttemptedAt = 0;
+            this.actor.remove_style_class_name('quotadeck-reconnecting');
+            if (this._retryId) {
+                Mainloop.source_remove(this._retryId);
+                this._retryId = 0;
+            }
             this._state = state;
             this._renderState(state);
+        });
+    }
+
+    _scheduleRetry() {
+        if (this._retryId) {
+            return;
+        }
+        this._retryId = Mainloop.timeout_add_seconds(RETRY_SECONDS, () => {
+            this._retryId = 0;
+            this._loadState();
+            return false;
         });
     }
 
@@ -92,19 +130,17 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     }
 
     _startServiceOnce() {
-        if (this._serviceStartAttempted) {
+        const now = GLib.get_monotonic_time() / 1000000;
+        if (this._serviceStartAttemptedAt
+            && now - this._serviceStartAttemptedAt < SERVICE_START_COOLDOWN_SECONDS) {
             return;
         }
-        this._serviceStartAttempted = true;
+        this._serviceStartAttemptedAt = now;
         try {
             Gio.Subprocess.new(
                 ['systemctl', '--user', 'start', 'quotadeck.service'],
                 Gio.SubprocessFlags.NONE
             );
-            Mainloop.timeout_add_seconds(3, () => {
-                this._loadState();
-                return false;
-            });
         } catch (error) {
             global.logError('QuotaDeck: could not start user service: ' + error.message);
         }
@@ -116,6 +152,7 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     }
 
     _renderOffline() {
+        this.actor.remove_style_class_name('quotadeck-reconnecting');
         this.set_applet_label('offline');
         this.set_applet_tooltip(_('QuotaDeck local service is unavailable'));
         this._setLevel('offline');
@@ -126,14 +163,21 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this._addActions();
     }
 
+    _renderReconnecting() {
+        this.actor.add_style_class_name('quotadeck-reconnecting');
+        this.set_applet_tooltip(_('QuotaDeck refresh delayed · retrying…'));
+    }
+
     _renderState(state) {
         const accounts = Array.isArray(state.accounts) ? state.accounts : [];
         this._refreshSettingsOptions(accounts);
         const indicator = this._selectIndicator(accounts);
+        const selectedItems = this._selectedAccounts(accounts);
+        const iconItem = indicator === null && selectedItems.length === 1 ? selectedItems[0] : indicator?.item;
+        this._setProviderIcon(iconItem);
 
         if (indicator === null) {
             this.set_applet_label('—');
-            const selectedItems = this._selectedAccounts(accounts);
             const stale = selectedItems.some(item => Boolean((item.snapshot || {}).stale));
             this._setLevel(stale ? 'offline' : 'normal');
         } else {
@@ -153,6 +197,15 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         accounts.forEach(item => this._addAccount(item));
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addActions();
+    }
+
+    _setProviderIcon(item) {
+        const provider = ((item || {}).account || {}).providerId;
+        const supported = ['claude', 'codex', 'zai'];
+        const filename = supported.includes(provider)
+            ? 'icon-' + provider + '-symbolic.svg'
+            : 'icon-symbolic.svg';
+        this.set_applet_icon_symbolic_path(GLib.build_filenamev([this._metadata.path, filename]));
     }
 
     _onDisplaySelectionChanged() {
