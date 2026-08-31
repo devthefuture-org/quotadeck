@@ -106,6 +106,18 @@ func (e *Engine) Refresh(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
+// RefreshProvider refreshes one provider without coupling a focused control
+// action to every other quota source. Provider-level locking keeps it safe to
+// call alongside the regular polling loop.
+func (e *Engine) RefreshProvider(ctx context.Context, providerID string) error {
+	for _, provider := range e.providers {
+		if provider.ID() == providerID {
+			return e.refreshProvider(ctx, provider)
+		}
+	}
+	return fmt.Errorf("provider %q is not enabled", providerID)
+}
+
 func (e *Engine) Current(ctx context.Context) ([]domain.AccountState, error) {
 	return e.store.LatestStates(ctx)
 }

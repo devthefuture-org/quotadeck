@@ -159,7 +159,7 @@ function App() {
       </header>
 
       {view === 'diagnostics' ? <Diagnostics /> : view === 'plans' ? (
-        <ControlCenter state={state} control={control} onChanged={load} />
+        <ControlCenter state={state} control={control} onChanged={setControl} />
       ) : (
         <main>
           <section class="hero">
@@ -271,7 +271,7 @@ function AccountCard({ state, mode, now, selected }: { state: AccountState; mode
   )
 }
 
-function ControlCenter({ state, control, onChanged }: { state: StateResponse | null; control: ControlState | null; onChanged: () => Promise<void> }) {
+function ControlCenter({ state, control, onChanged }: { state: StateResponse | null; control: ControlState | null; onChanged: (next: ControlState) => void }) {
   const [apiKey, setAPIKey] = useState('')
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
@@ -288,13 +288,11 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
         headers: { 'Content-Type': 'application/json', 'X-QuotaDeck-Request': 'control' },
         body: JSON.stringify(body),
       })
-      const payload = await response.json().catch(() => null) as { refresh?: string; error?: { message?: string } } | null
+      const payload = await response.json().catch(() => null) as { refresh?: string; control?: ControlState; error?: { message?: string } } | null
       if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
       setAPIKey('')
-      setMessage(payload?.refresh === 'completed_with_errors'
-        ? 'Plan selection saved, but at least one quota source could not be verified. Check its card for details.'
-        : 'Plan selection updated. New Claude Code sessions will use it.')
-      await onChanged()
+      if (payload?.control) onChanged(payload.control)
+      setMessage('Plan selection updated. New Claude Code sessions will use it.')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'The plan selection could not be updated.')
     } finally {

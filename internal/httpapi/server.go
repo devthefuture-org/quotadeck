@@ -227,7 +227,11 @@ func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusBadGateway, "switch_failed", "cswap could not activate this Claude account")
 		return
 	}
-	s.writeControlResult(writer, request)
+	s.writeControlResult(writer, request, "claude", func(status *control.Status) {
+		status.Mode = "claude"
+		status.Claude.ActiveAccountID = input.AccountID
+		status.ZAI.Active = false
+	})
 }
 
 func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request) {
@@ -253,7 +257,12 @@ func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request)
 		}
 		return
 	}
-	s.writeControlResult(writer, request)
+	s.writeControlResult(writer, request, "zai", func(status *control.Status) {
+		if input.Activate {
+			status.Mode = "zai"
+			status.ZAI.Active = true
+		}
+	})
 }
 
 func (s *Server) controlRequestAllowed(writer http.ResponseWriter, request *http.Request) bool {
@@ -272,23 +281,20 @@ func (s *Server) controlRequestAllowed(writer http.ResponseWriter, request *http
 	return true
 }
 
-func (s *Server) writeControlResult(writer http.ResponseWriter, request *http.Request) {
-	refreshStatus := "completed"
-	if err := s.engine.Refresh(request.Context()); err != nil {
-		if errors.Is(err, poller.ErrRefreshInProgress) {
-			refreshStatus = "in_progress"
-		} else {
-			refreshStatus = "completed_with_errors"
-		}
-	}
+func (s *Server) writeControlResult(writer http.ResponseWriter, request *http.Request, providerID string, updateStatus func(*control.Status)) {
 	states, err := s.engine.Current(request.Context())
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "state_unavailable", "the selection changed but state is temporarily unavailable")
 		return
 	}
+	status := s.controller.Status(states)
+	updateStatus(&status)
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"status": "selected", "refresh": refreshStatus, "control": s.controller.Status(states),
+		"status": "selected", "refresh": "queued", "control": status,
 	})
+	go func() {
+		_ = s.engine.RefreshProvider(context.Background(), providerID)
+	}()
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) error {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,6 +22,18 @@ type fakeController struct {
 	switched string
 	apiKey   string
 	activate bool
+}
+
+type slowUnrelatedProvider struct{}
+
+func (slowUnrelatedProvider) ID() string   { return "codex" }
+func (slowUnrelatedProvider) Name() string { return "Slow Codex" }
+func (slowUnrelatedProvider) Discover(ctx context.Context) ([]domain.AccountCandidate, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (slowUnrelatedProvider) Fetch(context.Context, domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	return domain.Account{}, domain.Snapshot{}, nil
 }
 
 func (f *fakeController) Status(states []domain.AccountState) control.Status {
@@ -116,5 +129,48 @@ func TestProviderControlsRequireGuardAndNeverEchoZAIKey(t *testing.T) {
 	}
 	if bytes.Contains(recorder.Body.Bytes(), []byte(secret)) {
 		t.Fatal("Z.ai API response leaked the submitted key")
+	}
+}
+
+func TestClaudeSwitchRespondsWithoutWaitingForUnrelatedProviders(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, account := range []domain.Account{
+		{ID: "claude:cswap:1", ProviderID: "claude", Label: "Old", Active: true, Source: "cswap"},
+		{ID: "claude:cswap:2", ProviderID: "claude", Label: "New", Source: "cswap"},
+	} {
+		snapshot := domain.Snapshot{AccountID: account.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh}
+		if err := database.Save(t.Context(), account, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := poller.New(database, []domain.Provider{slowUnrelatedProvider{}}, time.Minute, 500*time.Millisecond, 30)
+	controller := &fakeController{}
+	server := New(engine, doctor.Collector{Config: config.Default(), Version: "test"}, controller)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/control/claude/switch", bytes.NewBufferString(`{"accountId":"claude:cswap:2"}`))
+	request.RemoteAddr = "127.0.0.1:12345"
+	request.Header.Set("X-QuotaDeck-Request", "control")
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if elapsed := time.Since(started); elapsed >= 250*time.Millisecond {
+		t.Fatalf("switch waited for an unrelated provider: %s", elapsed)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("switch returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Refresh string         `json:"refresh"`
+		Control control.Status `json:"control"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Refresh != "queued" || response.Control.Claude.ActiveAccountID != "claude:cswap:2" {
+		t.Fatalf("unexpected immediate control response: %#v", response)
 	}
 }
