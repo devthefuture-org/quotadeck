@@ -38,6 +38,7 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this.menu = new Applet.AppletPopupMenu(this, orientation);
         this.menuManager.addMenu(this.menu);
 
+        this._migrateLegacySettings(metadata.uuid, instanceId);
         this._settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
         this._settings.bind('display-account', 'displayAccountId', () => this._onDisplaySelectionChanged());
         this._settings.bind('display-window', 'displayWindowId', () => this._onDisplaySelectionChanged());
@@ -49,6 +50,36 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
             this._loadState();
             return true;
         });
+    }
+
+    _migrateLegacySettings(uuid, instanceId) {
+        const id = String(instanceId);
+        if (!/^\d+$/.test(id)) {
+            return;
+        }
+        const settingsDirectory = GLib.build_filenamev([
+            GLib.get_user_config_dir(),
+            'cinnamon',
+            'spices',
+            uuid,
+        ]);
+        const legacyPath = GLib.build_filenamev([settingsDirectory, uuid + '.json']);
+        const instancePath = GLib.build_filenamev([settingsDirectory, id + '.json']);
+        if (!GLib.file_test(legacyPath, GLib.FileTest.EXISTS)
+            || GLib.file_test(instancePath, GLib.FileTest.EXISTS)) {
+            return;
+        }
+        try {
+            Gio.File.new_for_path(legacyPath).move(
+                Gio.File.new_for_path(instancePath),
+                Gio.FileCopyFlags.NONE,
+                null,
+                null
+            );
+            global.log('QuotaDeck: migrated Cinnamon settings to instance ' + id);
+        } catch (error) {
+            global.logError('QuotaDeck: could not migrate Cinnamon settings: ' + error.message);
+        }
     }
 
     on_applet_clicked() {
