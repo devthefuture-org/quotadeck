@@ -26,7 +26,7 @@
 
 QuotaDeck models `provider → accounts → windows[]`, so new provider-defined windows flow through storage, API, and UI without a `session`/`weekly` hard-code. The daemon binds to loopback, embeds its Preact frontend in one Go binary, stores history in SQLite WAL, streams updates with Server-Sent Events, and sends no telemetry.
 
-The **Plans** screen also controls which subscription new Claude Code sessions use: select any managed Claude account through `cswap`, or configure and activate a Z.ai GLM Coding Plan without editing JSON by hand.
+The **Plans** screen also controls which plan new Claude Code sessions use. Claude subscriptions managed by `cswap` and Z.ai GLM Coding Plan appear in one selector; Z.ai can be configured without editing JSON by hand.
 
 ## Install
 

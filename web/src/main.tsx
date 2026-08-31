@@ -1,5 +1,5 @@
 import { render } from 'preact'
-import { useCallback, useEffect, useMemo, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import './styles.css'
 
 type Provider = { id: string; name: string; enabled: boolean; source: string }
@@ -276,7 +276,10 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const apiKeyInput = useRef<HTMLInputElement>(null)
   const claudeAccounts = state?.accounts.filter(item => item.account.providerId === 'claude') ?? []
+  const zaiSelected = control?.mode === 'zai'
+  const zaiReady = Boolean(control?.zai.configured || apiKey.trim())
 
   async function request(path: string, method: string, body: unknown, busyKey: string) {
     setBusy(busyKey)
@@ -308,6 +311,12 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
     return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save')
   }
 
+  function selectZAI() {
+    if (zaiReady) return configureZAI(true)
+    apiKeyInput.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    apiKeyInput.current?.focus({ preventScroll: true })
+  }
+
   return (
     <main class="plan-control">
       <section class="hero compact control-hero">
@@ -328,8 +337,8 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
       <div class="plan-layout">
         <section class="plan-panel">
           <div class="plan-heading">
-            <div><span class="provider-glyph claude">C</span><div><p>Claude subscriptions</p><small>Managed safely by cswap</small></div></div>
-            <span class={`availability ${control?.claude.available ? 'ok' : ''}`}>{control?.claude.available ? 'cswap ready' : 'cswap unavailable'}</span>
+            <div><span class="provider-glyph claude">C</span><div><p>Claude Code plans</p><small>Claude subscriptions and compatible providers</small></div></div>
+            <span class={`availability ${control?.claude.available || control?.zai.configured ? 'ok' : ''}`}>{control?.claude.available ? 'cswap ready' : control?.zai.configured ? 'Z.ai ready' : 'setup needed'}</span>
           </div>
           <div class="plan-options">
             {claudeAccounts.map(item => {
@@ -347,7 +356,19 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
                 >{selected ? 'Selected' : busy === item.account.id ? 'Switching…' : 'Use plan'}</button>
               </div>
             })}
-            {claudeAccounts.length === 0 && <p class="control-empty">No cswap account is available yet.</p>}
+            <div class={`plan-option ${zaiSelected ? 'selected' : ''}`}>
+              <div>
+                <span>GLM Coding Plan</span>
+                <strong>Z.ai</strong>
+                <small>{control?.zai.configured ? 'API key stored · Anthropic-compatible' : 'Add an API key to enable'}</small>
+              </div>
+              <button
+                class={zaiSelected ? 'selected-plan-button' : 'plan-button'}
+                disabled={zaiSelected || busy !== ''}
+                onClick={() => void selectZAI()}
+              >{zaiSelected ? 'Selected' : busy === 'zai-activate' ? 'Switching…' : zaiReady ? 'Use plan' : 'Set up'}</button>
+            </div>
+            {claudeAccounts.length === 0 && <p class="control-empty">No cswap account is available; Z.ai can still be used independently.</p>}
           </div>
         </section>
 
@@ -360,6 +381,7 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
             <label for="zai-api-key">Z.ai API key</label>
             <input
               id="zai-api-key"
+              ref={apiKeyInput}
               type="password"
               value={apiKey}
               autoComplete="new-password"

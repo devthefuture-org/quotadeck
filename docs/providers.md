@@ -36,14 +36,14 @@ Bearer credentials are read only from their configured private sources and attac
 
 ## Selecting the active Claude Code plan
 
-Open **Plans** in the dashboard to choose between:
+Open **Plans** in the dashboard to choose from one unified list containing:
 
 - any enabled Claude subscription managed by `cswap`;
 - the Z.ai GLM Coding Plan.
 
 Selecting a Claude subscription removes only an active Z.ai endpoint and token from Claude Code settings, preserves unrelated settings, and delegates credential activation to `cswap`. If `cswap` fails, QuotaDeck restores the original settings file.
 
-For Z.ai, paste the API key once and choose **Save & use Z.ai**. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
+For Z.ai, choose **Set up**, paste the API key once, then select it like any Claude subscription. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
 
 The selection applies to new Claude Code processes. Existing sessions retain the environment with which they started.
 
