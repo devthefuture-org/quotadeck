@@ -2,6 +2,7 @@ imports.gi.versions.Soup = '3.0';
 
 const Applet = imports.ui.applet;
 const ByteArray = imports.byteArray;
+const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Mainloop = imports.mainloop;
@@ -15,8 +16,9 @@ const POLL_SECONDS = 60;
 const RETRY_SECONDS = 5;
 const OFFLINE_FAILURE_THRESHOLD = 3;
 const SERVICE_START_COOLDOWN_SECONDS = 30;
+const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai' };
 
-class QuotaDeckApplet extends Applet.TextIconApplet {
+class QuotaDeckApplet extends Applet.Applet {
     constructor(metadata, orientation, panelHeight, instanceId) {
         super(orientation, panelHeight, instanceId);
 
@@ -28,21 +30,25 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         this._consecutiveFailures = 0;
         this._serviceStartAttemptedAt = 0;
         this._state = null;
+        this._control = null;
+        this._panelIconSize = this.getPanelIconSize(St.IconType.SYMBOLIC);
 
-        this.set_applet_icon_symbolic_path(GLib.build_filenamev([metadata.path, 'icon-symbolic.svg']));
-        this.set_applet_label('—');
+        this.setAllowedLayout(Applet.AllowedLayout.BOTH);
+        this._indicatorBox = new St.BoxLayout({
+            vertical: [St.Side.LEFT, St.Side.RIGHT].includes(orientation),
+            style_class: 'quotadeck-indicator-box',
+        });
+        this.actor.add_actor(this._indicatorBox);
         this.set_applet_tooltip(_('QuotaDeck is connecting to the local service'));
         this.actor.add_style_class_name('quotadeck-applet');
 
-        this.menuManager = new PopupMenu.PopupMenuManager(this);
-        this.menu = new Applet.AppletPopupMenu(this, orientation);
-        this.menuManager.addMenu(this.menu);
+        this.menu = this._applet_context_menu;
+        this._quotaSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._quotaSection);
 
         this._migrateLegacySettings(metadata.uuid, instanceId);
         this._settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
-        this._settings.bind('display-account', 'displayAccountId', () => this._onDisplaySelectionChanged());
-        this._settings.bind('display-window', 'displayWindowId', () => this._onDisplaySelectionChanged());
-        this._lastDisplayAccountId = this.displayAccountId;
+        this._settings.bind('display-indicators', 'displayIndicators', () => this._onDisplaySelectionChanged());
 
         this._renderLoading();
         this._loadState();
@@ -83,7 +89,18 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     }
 
     on_applet_clicked() {
-        this.menu.toggle();
+        this._openDashboard();
+    }
+
+    on_orientation_changed(orientation) {
+        this._indicatorBox.set_vertical([St.Side.LEFT, St.Side.RIGHT].includes(orientation));
+    }
+
+    on_panel_icon_size_changed(size) {
+        this._panelIconSize = size;
+        if (this._state) {
+            this._renderState(this._state);
+        }
     }
 
     on_applet_removed_from_panel() {
@@ -126,6 +143,20 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
             }
             this._state = state;
             this._renderState(state);
+            this._loadControl();
+        });
+    }
+
+    _loadControl() {
+        this._request('GET', '/api/v1/control', null, (error, control) => {
+            if (error) {
+                return;
+            }
+            this._control = control;
+            if (this._state) {
+                const accounts = Array.isArray(this._state.accounts) ? this._state.accounts : [];
+                this._renderMenu(accounts);
+            }
         });
     }
 
@@ -178,19 +209,19 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     }
 
     _renderLoading() {
-        this.menu.removeAll();
-        this.menu.addMenuItem(this._labelItem(_('Loading quotas…')));
+        this._renderPanelMessage('—', 'normal');
+        this._quotaSection.removeAll();
+        this._quotaSection.addMenuItem(this._labelItem(_('Loading quotas…')));
     }
 
     _renderOffline() {
         this.actor.remove_style_class_name('quotadeck-reconnecting');
-        this.set_applet_label('offline');
+        this._renderPanelMessage('offline', 'offline');
         this.set_applet_tooltip(_('QuotaDeck local service is unavailable'));
-        this._setLevel('offline');
-        this.menu.removeAll();
-        this.menu.addMenuItem(this._labelItem(_('QuotaDeck service is offline')));
-        this.menu.addMenuItem(this._labelItem(_('The applet will retry automatically.')));
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._quotaSection.removeAll();
+        this._quotaSection.addMenuItem(this._labelItem(_('QuotaDeck service is offline')));
+        this._quotaSection.addMenuItem(this._labelItem(_('The applet will retry automatically.')));
+        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addActions();
     }
 
@@ -202,97 +233,160 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     _renderState(state) {
         const accounts = Array.isArray(state.accounts) ? state.accounts : [];
         this._refreshSettingsOptions(accounts);
-        const indicator = this._selectIndicator(accounts);
-        const selectedItems = this._selectedAccounts(accounts);
-        const iconItem = indicator === null && selectedItems.length === 1 ? selectedItems[0] : indicator?.item;
-        this._setProviderIcon(iconItem);
+        const indicators = this._selectIndicators(accounts);
+        this._renderPanelIndicators(indicators);
+        const summaries = indicators.length === 0
+            ? [_('No actionable quota window')]
+            : indicators.map(indicator => this._indicatorSummary(indicator));
+        this.set_applet_tooltip(['QuotaDeck', ...summaries].join('\n'));
 
-        if (indicator === null) {
-            this.set_applet_label('—');
-            const stale = selectedItems.some(item => Boolean((item.snapshot || {}).stale));
-            this._setLevel(stale ? 'offline' : 'normal');
-        } else {
-            this.set_applet_label(Math.round(indicator.used) + '%');
-            this._setLevel(indicator.used >= 90 ? 'critical' : indicator.used >= 75 ? 'warning' : 'normal');
-        }
-        const summary = indicator === null
-            ? _('No actionable quota window')
-            : this._indicatorSummary(indicator);
-        this.set_applet_tooltip('QuotaDeck · ' + summary);
+        this._renderMenu(accounts);
+    }
 
-        this.menu.removeAll();
-        this.menu.addMenuItem(this._labelItem(_('QuotaDeck · local quotas'), 'quotadeck-menu-title'));
+    _renderMenu(accounts) {
+        this._quotaSection.removeAll();
+        this._quotaSection.addMenuItem(this._labelItem(_('QuotaDeck · local quotas'), 'quotadeck-menu-title'));
+        this._quotaSection.addMenuItem(this._labelItem(_('Selected Claude Code plan'), 'quotadeck-plan-heading'));
+        this._quotaSection.addMenuItem(this._labelItem('  ' + this._selectedPlanLabel(accounts), 'quotadeck-selected-plan'));
+        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         if (accounts.length === 0) {
-            this.menu.addMenuItem(this._labelItem(_('No account detected yet')));
+            this._quotaSection.addMenuItem(this._labelItem(_('No account detected yet')));
         }
         accounts.forEach(item => this._addAccount(item));
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addActions();
     }
 
-    _setProviderIcon(item) {
-        const provider = ((item || {}).account || {}).providerId;
+    _selectedPlanLabel(accounts) {
+        if (!this._control) {
+            return _('Detecting…');
+        }
+        if (this._control.mode === 'zai') {
+            return 'Z.ai · GLM Coding Plan';
+        }
+        if (this._control.mode === 'claude') {
+            const activeId = ((this._control.claude || {}).activeAccountId);
+            const selected = accounts.find(item => ((item || {}).account || {}).id === activeId);
+            if (selected) {
+                const account = selected.account || {};
+                return [account.label || activeId, account.plan].filter(Boolean).join(' · ');
+            }
+            return activeId || _('Claude subscription');
+        }
+        return _('No plan detected');
+    }
+
+    _renderPanelMessage(text, level) {
+        this._indicatorBox.destroy_all_children();
+        this._indicatorBox.add_actor(this._indicatorActor(null, text, level));
+    }
+
+    _renderPanelIndicators(indicators) {
+        this._indicatorBox.destroy_all_children();
+        if (indicators.length === 0) {
+            this._indicatorBox.add_actor(this._indicatorActor(null, '—', 'normal'));
+            return;
+        }
+        indicators.forEach(indicator => {
+            const provider = ((indicator.item || {}).account || {}).providerId;
+            const text = indicator.used === null ? '—' : Math.round(indicator.used) + '%';
+            this._indicatorBox.add_actor(this._indicatorActor(provider, text, this._indicatorLevel(indicator)));
+        });
+    }
+
+    _indicatorActor(provider, text, level) {
         const supported = ['claude', 'codex', 'zai'];
         const filename = supported.includes(provider)
             ? 'icon-' + provider + '-symbolic.svg'
             : 'icon-symbolic.svg';
-        this.set_applet_icon_symbolic_path(GLib.build_filenamev([this._metadata.path, filename]));
+        const box = new St.BoxLayout({ style_class: 'quotadeck-indicator quotadeck-' + level });
+        const icon = new St.Icon({
+            gicon: new Gio.FileIcon({
+                file: Gio.File.new_for_path(GLib.build_filenamev([this._metadata.path, filename])),
+            }),
+            icon_type: St.IconType.SYMBOLIC,
+            icon_size: this._panelIconSize,
+            style_class: 'quotadeck-provider-icon',
+        });
+        const label = new St.Label({
+            text,
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'applet-label quotadeck-indicator-value',
+        });
+        box.add_actor(icon);
+        box.add_actor(label);
+        return box;
+    }
+
+    _indicatorLevel(indicator) {
+        if (Boolean(((indicator.item || {}).snapshot || {}).stale)) {
+            return 'offline';
+        }
+        if (indicator.used === null) {
+            return 'normal';
+        }
+        return indicator.used >= 90 ? 'critical' : indicator.used >= 75 ? 'warning' : 'normal';
     }
 
     _onDisplaySelectionChanged() {
-        if (this.displayAccountId !== this._lastDisplayAccountId) {
-            this._lastDisplayAccountId = this.displayAccountId;
-            this.displayWindowId = 'auto';
-        }
         if (this._state) {
             this._renderState(this._state);
         }
     }
 
     _refreshSettingsOptions(accounts) {
-        const accountOptions = {};
-        accountOptions[_('Automatic — tightest plan')] = 'auto';
+        const options = {};
+        options[_('Automatic — tightest available')] = 'auto';
         accounts.forEach(item => {
             const account = item.account || {};
             if (!account.id) {
                 return;
             }
-            const details = account.plan || account.providerId || _('unknown plan');
-            this._addOption(accountOptions, (account.label || account.id) + ' · ' + details, account.id);
-        });
-        if (this.displayAccountId !== 'auto' && !this._hasOptionValue(accountOptions, this.displayAccountId)) {
-            this._addOption(accountOptions, _('Unavailable account') + ' · ' + this.displayAccountId, this.displayAccountId);
-        }
-        this._setOptions('display-account', accountOptions);
-
-        const windowOptions = {};
-        windowOptions[_('Automatic — tightest indicator')] = 'auto';
-        const selected = accounts.find(item => (item.account || {}).id === this.displayAccountId);
-        if (selected) {
-            const windows = Array.isArray((selected.snapshot || {}).windows)
-                ? selected.snapshot.windows
-                : [];
+            const provider = PROVIDER_LABELS[account.providerId] || account.providerId || _('Provider');
+            const accountLabel = account.label || account.id;
+            this._addOption(
+                options,
+                provider + ' · ' + accountLabel + ' · ' + _('Tightest indicator'),
+                this._encodeSelector(account.id, 'auto')
+            );
+            const windows = Array.isArray((item.snapshot || {}).windows) ? item.snapshot.windows : [];
             windows.forEach(window => {
                 if (window.id) {
-                    this._addOption(windowOptions, window.label || window.id, window.id);
+                    this._addOption(
+                        options,
+                        provider + ' · ' + accountLabel + ' · ' + (window.label || window.id),
+                        this._encodeSelector(account.id, window.id)
+                    );
                 }
             });
+        });
+        const rows = Array.isArray(this.displayIndicators) ? this.displayIndicators : [];
+        rows.forEach(row => {
+            const value = row && row.indicator;
+            if (value && !Object.values(options).includes(value)) {
+                this._addOption(options, _('Unavailable indicator') + ' · ' + value, value);
+            }
+        });
+        this._setIndicatorOptions(options);
+        if (rows.length === 0) {
+            const legacyAccount = this._settings.getValue('display-account') || 'auto';
+            const legacyWindow = this._settings.getValue('display-window') || 'auto';
+            const legacySelector = legacyAccount === 'auto'
+                ? 'auto'
+                : this._encodeSelector(legacyAccount, legacyWindow);
+            this._settings.setValue('display-indicators', [{ indicator: legacySelector }]);
         }
-        if (this.displayWindowId !== 'auto' && !this._hasOptionValue(windowOptions, this.displayWindowId)) {
-            this._addOption(windowOptions, _('Unavailable indicator') + ' · ' + this.displayWindowId, this.displayWindowId);
-        }
-        this._setOptions('display-window', windowOptions);
     }
 
-    _hasOptionValue(options, value) {
-        return Object.keys(options).some(label => options[label] === value);
-    }
-
-    _setOptions(key, options) {
-        const current = this._settings.getOptions(key);
-        if (JSON.stringify(current) !== JSON.stringify(options)) {
-            this._settings.setOptions(key, options);
+    _setIndicatorOptions(options) {
+        const setting = this._settings.settingsData['display-indicators'];
+        const column = setting && setting.columns.find(item => item.id === 'indicator');
+        if (!column || JSON.stringify(column.options) === JSON.stringify(options)) {
+            return;
         }
+        column.options = options;
+        // Cinnamon has no public API for options nested inside a list column.
+        this._settings._saveToFile();
     }
 
     _addOption(options, label, value) {
@@ -305,27 +399,68 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         options[candidate] = value;
     }
 
-    _selectedAccounts(accounts) {
-        if (!this.displayAccountId || this.displayAccountId === 'auto') {
-            return accounts;
-        }
-        return accounts.filter(item => (item.account || {}).id === this.displayAccountId);
+    _encodeSelector(accountId, windowId) {
+        return JSON.stringify([accountId, windowId]);
     }
 
-    _selectIndicator(accounts) {
-        const selectedItems = this._selectedAccounts(accounts);
+    _decodeSelector(value) {
+        try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) && parsed.length === 2 ? parsed : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    _selectIndicators(accounts) {
+        const rows = Array.isArray(this.displayIndicators) ? this.displayIndicators : [];
+        const selectors = rows.length > 0
+            ? rows.map(row => row && row.indicator).filter(Boolean)
+            : ['auto'];
+        const seen = new Set();
+        const indicators = [];
+        selectors.forEach(selector => {
+            const indicator = this._resolveIndicator(accounts, selector);
+            if (!indicator) {
+                return;
+            }
+            const key = this._encodeSelector((indicator.item.account || {}).id, indicator.window.id);
+            if (!seen.has(key)) {
+                seen.add(key);
+                indicators.push(indicator);
+            }
+        });
+        return indicators;
+    }
+
+    _resolveIndicator(accounts, selector) {
+        if (selector === 'auto') {
+            return this._tightestIndicator(accounts);
+        }
+        const decoded = this._decodeSelector(selector);
+        if (!decoded) {
+            return null;
+        }
+        const [accountId, windowId] = decoded;
+        const item = accounts.find(candidate => ((candidate || {}).account || {}).id === accountId);
+        if (!item) {
+            return null;
+        }
+        if (windowId === 'auto') {
+            return this._tightestIndicator([item]);
+        }
+        const windows = Array.isArray((item.snapshot || {}).windows) ? item.snapshot.windows : [];
+        const window = windows.find(candidate => candidate.id === windowId);
+        return window ? { item, window, used: this._usedPercent(window) } : null;
+    }
+
+    _tightestIndicator(items) {
         let best = null;
-        selectedItems.forEach(item => {
+        items.forEach(item => {
             const windows = Array.isArray((item.snapshot || {}).windows)
                 ? item.snapshot.windows
                 : [];
             windows.forEach(window => {
-                if (this.displayAccountId !== 'auto'
-                    && this.displayWindowId
-                    && this.displayWindowId !== 'auto'
-                    && window.id !== this.displayWindowId) {
-                    return;
-                }
                 const used = this._usedPercent(window);
                 if (used !== null && (best === null || used > best.used)) {
                     best = { item, window, used };
@@ -340,7 +475,7 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         const plan = account.plan || account.label || account.providerId;
         const windowLabel = indicator.window.label || indicator.window.id;
         const details = [plan, windowLabel].filter(Boolean).join(' · ');
-        const used = Math.round(indicator.used) + _('% used');
+        const used = indicator.used === null ? _('No percentage') : Math.round(indicator.used) + _('% used');
         return details ? used + ' · ' + details : used;
     }
 
@@ -349,21 +484,21 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         const snapshot = item.snapshot || {};
         const provider = account.providerId || 'provider';
         const status = snapshot.status || 'unknown';
-        this.menu.addMenuItem(this._labelItem(
+        this._quotaSection.addMenuItem(this._labelItem(
             (account.label || provider) + '  ·  ' + status,
             'quotadeck-account-title'
         ));
 
         const windows = Array.isArray(snapshot.windows) ? snapshot.windows : [];
         if (windows.length === 0) {
-            this.menu.addMenuItem(this._labelItem('  ' + _('No quota window'), 'quotadeck-window-muted'));
+            this._quotaSection.addMenuItem(this._labelItem('  ' + _('No quota window'), 'quotadeck-window-muted'));
             return;
         }
         windows.forEach(window => {
             const used = this._usedPercent(window);
             const percentage = used === null ? '—' : Math.round(used) + '%';
             const reset = window.resetsAt ? this._formatReset(window.resetsAt) : _('no reset');
-            this.menu.addMenuItem(this._labelItem(
+            this._quotaSection.addMenuItem(this._labelItem(
                 '  ' + (window.label || _('Window')) + ':  ' + percentage + '  ·  ' + reset,
                 'quotadeck-window'
             ));
@@ -373,17 +508,17 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
     _addActions() {
         const open = new PopupMenu.PopupIconMenuItem(_('Open QuotaDeck'), 'quotadeck', St.IconType.SYMBOLIC);
         open.connect('activate', () => this._openDashboard());
-        this.menu.addMenuItem(open);
+        this._quotaSection.addMenuItem(open);
 
         const refresh = new PopupMenu.PopupIconMenuItem(_('Refresh now'), 'view-refresh-symbolic', St.IconType.SYMBOLIC);
         refresh.connect('activate', () => {
             this._request('POST', '/api/v1/refresh', { 'X-QuotaDeck-Request': 'refresh' }, () => this._loadState());
         });
-        this.menu.addMenuItem(refresh);
+        this._quotaSection.addMenuItem(refresh);
 
-        const configure = new PopupMenu.PopupIconMenuItem(_('Configure panel indicator'), 'preferences-system-symbolic', St.IconType.SYMBOLIC);
+        const configure = new PopupMenu.PopupIconMenuItem(_('Configure panel indicators'), 'preferences-system-symbolic', St.IconType.SYMBOLIC);
         configure.connect('activate', () => this.configureApplet());
-        this.menu.addMenuItem(configure);
+        this._quotaSection.addMenuItem(configure);
     }
 
     _openDashboard() {
@@ -435,12 +570,6 @@ class QuotaDeckApplet extends Applet.TextIconApplet {
         return _('resets in ') + Math.round(seconds / 86400) + 'd';
     }
 
-    _setLevel(level) {
-        ['normal', 'warning', 'critical', 'offline'].forEach(name => {
-            this.actor.remove_style_class_name('quotadeck-' + name);
-        });
-        this.actor.add_style_class_name('quotadeck-' + level);
-    }
 }
 
 function main(metadata, orientation, panelHeight, instanceId) {

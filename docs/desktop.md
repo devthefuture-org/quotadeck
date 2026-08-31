@@ -18,7 +18,7 @@ After installing the `.deb`:
 
 The applet reads the loopback API and starts the packaged user service when necessary. Its menu summarizes every quota window and opens the full dashboard for details. In the applet settings, **Plan / account** selects the subscription to represent in the panel and **Indicator** selects one of its quota windows. Both default to automatic selection of the tightest available window.
 
-Add the QuotaDeck applet to the panel multiple times to display as many indicators as needed. Every instance has independent account and quota-window settings, and automatically shows the Claude, Codex, or Z.ai provider glyph beside its percentage. A transient local API error keeps the last value visible while the applet retries; `offline` appears only after repeated failures.
+Use **Configure panel indicators** and press **+** to display as many indicators as needed inside one applet. Each row selects an account and quota window, can be reordered independently, and renders a Claude, Codex, or Z.ai provider glyph beside its percentage. Multiple applet instances remain available when separate panel groups are useful. Left-click the applet to open QuotaDeck; right-click to open its quota menu, which also identifies the Claude Code plan currently selected. A transient local API error keeps the last values visible while the applet retries; `offline` appears only after repeated failures.
 
 To install only the applet from a source checkout:
 

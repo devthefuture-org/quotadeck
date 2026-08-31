@@ -1,24 +1,32 @@
 {
   "indicator-header": {
     "type": "header",
-    "description": "Panel indicator · add another QuotaDeck applet for more"
+    "description": "Panel indicators"
+  },
+  "display-indicators": {
+    "type": "list",
+    "default": [],
+    "description": "Indicators shown in the panel",
+    "tooltip": "Use + to add indicators. Each row shows one provider icon and quota percentage; drag or use the arrows to reorder them.",
+    "height": 240,
+    "columns": [
+      {
+        "id": "indicator",
+        "title": "Provider · account · quota window",
+        "type": "string",
+        "default": "auto",
+        "options": {
+          "Automatic — tightest available": "auto"
+        }
+      }
+    ]
   },
   "display-account": {
-    "type": "combobox",
-    "default": "auto",
-    "description": "Plan / account",
-    "tooltip": "Choose which subscription account is represented in the panel.",
-    "options": {
-      "Automatic — tightest plan": "auto"
-    }
+    "type": "generic",
+    "default": "auto"
   },
   "display-window": {
-    "type": "combobox",
-    "default": "auto",
-    "description": "Indicator",
-    "tooltip": "Choose a quota window from the selected account. Automatic shows its most consumed window.",
-    "options": {
-      "Automatic — tightest indicator": "auto"
-    }
+    "type": "generic",
+    "default": "auto"
   }
 }

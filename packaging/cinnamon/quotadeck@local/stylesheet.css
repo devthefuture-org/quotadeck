@@ -2,6 +2,18 @@
     spacing: 6px;
 }
 
+.quotadeck-indicator-box {
+    spacing: 10px;
+}
+
+.quotadeck-indicator {
+    spacing: 4px;
+}
+
+.quotadeck-provider-icon {
+    icon-size: 16px;
+}
+
 .quotadeck-applet .applet-label {
     font-feature-settings: "tnum";
     font-weight: 700;
@@ -25,6 +37,16 @@
 
 .quotadeck-menu-title,
 .quotadeck-account-title {
+    font-weight: 700;
+}
+
+.quotadeck-plan-heading {
+    color: #9da391;
+    font-size: 0.85em;
+}
+
+.quotadeck-selected-plan {
+    color: #c9f760;
     font-weight: 700;
 }
 
