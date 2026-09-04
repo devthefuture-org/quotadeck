@@ -2,8 +2,10 @@ SHELL := /bin/bash
 VERSION ?= 0.1.0
 GO_ENV := GOCACHE=/tmp/quotadeck-go-cache GOMODCACHE=/tmp/quotadeck-go-mod
 DESKTOP_GO_ENV := GOCACHE=/tmp/quotadeck-go-cache
-WAILS ?= $(shell go env GOPATH)/bin/wails
-PKG_CONFIG_ENV := PKG_CONFIG=/usr/bin/pkg-config PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+WAILS ?= $(shell command -v wails 2>/dev/null || printf '%s/bin/wails' "$$(go env GOPATH)")
+PKG_CONFIG ?= pkg-config
+PKG_CONFIG_PATH ?= /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+PKG_CONFIG_ENV := PKG_CONFIG=$(PKG_CONFIG) PKG_CONFIG_PATH=$(PKG_CONFIG_PATH)
 
 .PHONY: dev demo web-build docs-dev docs-build test test-race lint build desktop-icon desktop-build package-cinnamon package-appimage package-deb package-release clean
 
@@ -38,7 +40,9 @@ build: web-build
 	mkdir -p dist
 	$(GO_ENV) CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o dist/quotadeck ./cmd/quotadeck
 
-desktop-icon:
+desktop-icon: cmd/quotadeck-desktop/appicon.png
+
+cmd/quotadeck-desktop/appicon.png: packaging/desktop/quotadeck.svg
 	convert -background none packaging/desktop/quotadeck.svg -resize 512x512 cmd/quotadeck-desktop/appicon.png
 
 desktop-build: web-build desktop-icon

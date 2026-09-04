@@ -26,7 +26,7 @@
 
 QuotaDeck models `provider → accounts → windows[]`, so new provider-defined windows flow through storage, API, and UI without a `session`/`weekly` hard-code. The daemon binds to loopback, embeds its Preact frontend in one Go binary, stores history in SQLite WAL, streams updates with Server-Sent Events, and sends no telemetry.
 
-The **Plans** screen also controls which plan new Claude Code sessions use. Claude subscriptions managed by `cswap` and Z.ai GLM Coding Plan appear in one selector; Z.ai can be configured without editing JSON by hand.
+The **Plans** screen also controls which plan new Claude Code sessions use. Claude subscriptions managed by `cswap` and Z.ai GLM Coding Plan appear in one selector; both can be set up without editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
 
 ## Install
 
@@ -59,7 +59,15 @@ Full setup instructions live in the [provider guide](https://devthefuture-org.gi
 
 ## Build and run
 
-Requirements: Go 1.25+, Node.js 22+, and npm. Linux desktop packaging additionally needs Wails v2, GTK 3, WebKitGTK 4.1, ImageMagick, and `dpkg-deb`.
+The recommended development environment is [Devbox](https://www.jetify.com/devbox), which pins Go, Node.js, Wails, GTK/WebKitGTK, ImageMagick, `uv`, and Debian packaging tools:
+
+```bash
+devbox run bootstrap
+devbox run test
+devbox run -- make package-deb VERSION=0.2.8
+```
+
+Without Devbox, requirements are Go 1.25+, Node.js 22+, and npm. Linux desktop packaging additionally needs Wails v2, GTK 3, WebKitGTK 4.1, ImageMagick, and `dpkg-deb`.
 
 ```bash
 npm ci --prefix web
@@ -77,6 +85,7 @@ The default configuration is `${XDG_CONFIG_HOME:-~/.config}/quotadeck/config.yam
 
 ```bash
 quotadeck doctor
+quotadeck setup cswap
 quotadeck refresh
 quotadeck status --json
 quotadeck service install --user

@@ -33,6 +33,7 @@ type Server struct {
 
 type Controller interface {
 	Status(states []domain.AccountState) control.Status
+	SetupClaude(ctx context.Context) (control.ClaudeSetupResult, error)
 	SwitchClaude(ctx context.Context, accountID string) error
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
 }
@@ -60,6 +61,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("POST /api/v1/refresh", s.refresh)
 	mux.HandleFunc("GET /api/v1/control", s.controlStatus)
+	mux.HandleFunc("POST /api/v1/control/claude/setup", s.setupClaude)
 	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
 	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
 	mux.Handle("/", spaHandler())
@@ -231,6 +233,39 @@ func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request)
 		status.Mode = "claude"
 		status.Claude.ActiveAccountID = input.AccountID
 		status.ZAI.Active = false
+	})
+}
+
+func (s *Server) setupClaude(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	result, err := s.controller.SetupClaude(request.Context())
+	if err != nil {
+		switch {
+		case errors.Is(err, control.ErrCswapInstallerMissing):
+			writeError(writer, http.StatusFailedDependency, "installer_missing", "install uv or pipx, then retry cswap setup")
+		case errors.Is(err, control.ErrCswapCustomBinary):
+			writeError(writer, http.StatusConflict, "custom_cswap_binary", "automatic setup requires providers.claude.binary to be cswap")
+		case errors.Is(err, control.ErrClaudeLoginRequired):
+			writeError(writer, http.StatusConflict, "claude_login_required", "sign in to Claude Code once, then retry cswap setup")
+		default:
+			writeError(writer, http.StatusBadGateway, "cswap_setup_failed", "cswap could not be installed or configured")
+		}
+		return
+	}
+	refresh := "completed"
+	if err := s.engine.RefreshProvider(request.Context(), "claude"); err != nil {
+		refresh = "completed_with_errors"
+	}
+	states, err := s.engine.Current(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "state_unavailable", "cswap is ready but state is temporarily unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": "ready", "refresh": refresh, "setup": result,
+		"control": s.controller.Status(states),
 	})
 }
 

@@ -307,6 +307,31 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
     return request('/api/v1/control/claude/switch', 'POST', { accountId }, accountId)
   }
 
+  async function setupClaude() {
+    setBusy('cswap-setup')
+    setMessage('')
+    setError('')
+    try {
+      const response = await fetch('/api/v1/control/claude/setup', {
+        method: 'POST',
+        headers: { 'X-QuotaDeck-Request': 'control' },
+      })
+      const payload = await response.json().catch(() => null) as {
+        control?: ControlState
+        setup?: { installed: boolean; accountAdded: boolean; accountCount: number }
+        error?: { message?: string }
+      } | null
+      if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
+      if (payload?.control) onChanged(payload.control)
+      const count = payload?.setup?.accountCount ?? 0
+      setMessage(`cswap is ready with ${count} Claude account${count === 1 ? '' : 's'}.`)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'cswap setup could not complete.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   function configureZAI(activate: boolean) {
     return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save')
   }
@@ -341,6 +366,18 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
             <span class={`availability ${control?.claude.available || control?.zai.configured ? 'ok' : ''}`}>{control?.claude.available ? 'cswap ready' : control?.zai.configured ? 'Z.ai ready' : 'setup needed'}</span>
           </div>
           <div class="plan-options">
+            {(!control?.claude.available || claudeAccounts.length === 0) && <div class="plan-option setup-option">
+              <div>
+                <span>Automatic setup</span>
+                <strong>{control?.claude.available ? 'Add your current Claude login' : 'Install and configure cswap'}</strong>
+                <small>QuotaDeck uses uv or pipx, then lets cswap import the current Claude Code login without exposing credentials.</small>
+              </div>
+              <button
+                class="plan-button"
+                disabled={busy !== ''}
+                onClick={() => void setupClaude()}
+              >{busy === 'cswap-setup' ? 'Setting up…' : control?.claude.available ? 'Set up cswap' : 'Install & set up'}</button>
+            </div>}
             {claudeAccounts.map(item => {
               const selected = control?.mode === 'claude' && control.claude.activeAccountId === item.account.id
               return <div class={`plan-option ${selected ? 'selected' : ''}`} key={item.account.id}>
@@ -368,7 +405,7 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
                 onClick={() => void selectZAI()}
               >{zaiSelected ? 'Selected' : busy === 'zai-activate' ? 'Switching…' : zaiReady ? 'Use plan' : 'Set up'}</button>
             </div>
-            {claudeAccounts.length === 0 && <p class="control-empty">No cswap account is available; Z.ai can still be used independently.</p>}
+            {claudeAccounts.length === 0 && <p class="control-empty">Sign in to Claude Code first if automatic setup asks for a login.</p>}
           </div>
         </section>
 

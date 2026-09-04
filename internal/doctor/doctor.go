@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
+	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
 
 type Report struct {
@@ -62,7 +62,7 @@ func (c Collector) claudeSources() []SourceCheck {
 	if !c.Config.Providers.Claude.Enabled {
 		return []SourceCheck{{Provider: "claude", Source: "cswap", Accepted: false, Reason: "provider disabled"}}
 	}
-	path, err := exec.LookPath(c.Config.Providers.Claude.Binary)
+	path, err := runner.LookPath(c.Config.Providers.Claude.Binary)
 	if err != nil {
 		return []SourceCheck{{Provider: "claude", Source: "cswap", Accepted: false, Reason: "cswap executable not found"}}
 	}
@@ -132,17 +132,21 @@ func (c Collector) codexSources() []SourceCheck {
 }
 
 func inspectTool(ctx context.Context, name string) Tool {
-	path, err := exec.LookPath(name)
+	path, err := runner.LookPath(name)
 	if err != nil {
 		return Tool{Name: name}
 	}
 	tool := Tool{Name: name, Present: true, Path: path}
 	commandCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(commandCtx, path, "--version").CombinedOutput()
+	output, err := runner.ExecRunner{}.Run(commandCtx, path, "--version")
 	if err == nil {
+		text := string(output.Stdout)
+		if output.Stderr != "" {
+			text += "\n" + output.Stderr
+		}
 		version := ""
-		for _, line := range strings.Split(string(output), "\n") {
+		for _, line := range strings.Split(text, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(strings.ToLower(line), "warning:") {
 				continue

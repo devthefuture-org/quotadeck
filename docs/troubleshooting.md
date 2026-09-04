@@ -7,6 +7,17 @@ quotadeck doctor
 quotadeck service status
 ```
 
+## cswap is missing or Claude indicators stay stale
+
+Run the one-command setup, then refresh:
+
+```bash
+quotadeck setup cswap
+quotadeck refresh
+```
+
+QuotaDeck searches common per-user binary directories even when systemd or a graphical launcher has a reduced `PATH`. Setup uses `uv` first and falls back to `pipx`; the Debian package installs `pipx` as a dependency.
+
 ## Codex says authentication is required
 
 Codex authentication belongs to a specific `CODEX_HOME`. Confirm that QuotaDeck and the login command use the same value:

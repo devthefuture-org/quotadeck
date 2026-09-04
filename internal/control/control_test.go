@@ -15,14 +15,43 @@ import (
 )
 
 type fakeRunner struct {
-	args []string
-	err  error
+	args       []string
+	err        error
+	accounts   int
+	paths      map[string]bool
+	installRun bool
 }
 
-func (f *fakeRunner) LookPath(name string) (string, error) { return "/bin/" + name, nil }
+func (f *fakeRunner) LookPath(name string) (string, error) {
+	if f.paths != nil && !f.paths[name] {
+		return "", os.ErrNotExist
+	}
+	return "/bin/" + name, nil
+}
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (runner.Result, error) {
 	f.args = append([]string{name}, args...)
-	return runner.Result{Stdout: []byte(`{"schemaVersion":1}`)}, f.err
+	if f.err != nil {
+		return runner.Result{}, f.err
+	}
+	if name == "uv" {
+		f.installRun = true
+		if f.paths != nil {
+			f.paths["cswap"] = true
+		}
+	}
+	if name == "cswap" && len(args) > 0 && args[0] == "add" {
+		f.accounts++
+	}
+	if name == "cswap" && len(args) > 1 && args[0] == "list" && args[1] == "--json" {
+		accounts := make([]map[string]any, f.accounts)
+		return runner.Result{Stdout: mustJSON(accounts)}, nil
+	}
+	return runner.Result{Stdout: []byte(`{"schemaVersion":1}`)}, nil
+}
+
+func mustJSON(accounts []map[string]any) []byte {
+	payload, _ := json.Marshal(map[string]any{"schemaVersion": 1, "accounts": accounts})
+	return payload
 }
 
 func testManager(t *testing.T, commandRunner runner.Runner) (*Manager, Paths) {
@@ -164,5 +193,43 @@ func TestSwitchClaudeRejectsArgumentInjection(t *testing.T) {
 	manager, _ := testManager(t, &fakeRunner{})
 	if err := manager.SwitchClaude(t.Context(), "claude:cswap:1 --force"); !errors.Is(err, ErrInvalidAccount) {
 		t.Fatalf("expected invalid account, got %v", err)
+	}
+}
+
+func TestSetupClaudeInstallsWithUVAndAddsCurrentLogin(t *testing.T) {
+	commandRunner := &fakeRunner{paths: map[string]bool{"uv": true}}
+	manager, _ := testManager(t, commandRunner)
+
+	result, err := manager.SetupClaude(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Installed || !result.AccountAdded || result.AccountCount != 1 || !commandRunner.installRun {
+		t.Fatalf("unexpected setup result: %#v", result)
+	}
+}
+
+func TestSetupClaudeLeavesExistingAccountsUntouched(t *testing.T) {
+	commandRunner := &fakeRunner{accounts: 2}
+	manager, _ := testManager(t, commandRunner)
+
+	result, err := manager.SetupClaude(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Installed || result.AccountAdded || result.AccountCount != 2 {
+		t.Fatalf("unexpected setup result: %#v", result)
+	}
+	if !reflect.DeepEqual(commandRunner.args, []string{"cswap", "list", "--json"}) {
+		t.Fatalf("setup mutated existing accounts: %#v", commandRunner.args)
+	}
+}
+
+func TestSetupClaudeRequiresSupportedInstaller(t *testing.T) {
+	commandRunner := &fakeRunner{paths: map[string]bool{}}
+	manager, _ := testManager(t, commandRunner)
+
+	if _, err := manager.SetupClaude(t.Context()); !errors.Is(err, ErrCswapInstallerMissing) {
+		t.Fatalf("expected missing installer error, got %v", err)
 	}
 }

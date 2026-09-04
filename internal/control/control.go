@@ -26,9 +26,12 @@ const (
 )
 
 var (
-	ErrInvalidAccount   = errors.New("invalid Claude account")
-	ErrInvalidKey       = errors.New("invalid Z.ai API key")
-	ErrZAINotConfigured = errors.New("Z.ai is not configured")
+	ErrInvalidAccount        = errors.New("invalid Claude account")
+	ErrInvalidKey            = errors.New("invalid Z.ai API key")
+	ErrZAINotConfigured      = errors.New("Z.ai is not configured")
+	ErrCswapInstallerMissing = errors.New("neither uv nor pipx is available to install cswap")
+	ErrCswapCustomBinary     = errors.New("automatic installation requires the default cswap binary name")
+	ErrClaudeLoginRequired   = errors.New("Claude Code must be logged in before cswap can add an account")
 )
 
 type Paths struct {
@@ -45,6 +48,12 @@ type Status struct {
 type ClaudeStatus struct {
 	Available       bool   `json:"available"`
 	ActiveAccountID string `json:"activeAccountId,omitempty"`
+}
+
+type ClaudeSetupResult struct {
+	Installed    bool `json:"installed"`
+	AccountAdded bool `json:"accountAdded"`
+	AccountCount int  `json:"accountCount"`
 }
 
 type ZAIStatus struct {
@@ -154,6 +163,84 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 		return fmt.Errorf("cswap could not switch account: %w", err)
 	}
 	return nil
+}
+
+// SetupClaude installs the supported claude-swap package when necessary and
+// imports the current Claude Code login when no cswap account exists yet.
+// Credentials remain entirely inside cswap; QuotaDeck only invokes its public
+// commands and inspects the documented, non-secret JSON account list.
+func (m *Manager) SetupClaude(ctx context.Context) (ClaudeSetupResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := ClaudeSetupResult{}
+	if _, err := m.runner.LookPath(m.claudeBinary); err != nil {
+		if filepath.Base(m.claudeBinary) != m.claudeBinary || m.claudeBinary != "cswap" {
+			return result, ErrCswapCustomBinary
+		}
+		installer, args, err := m.csSwapInstaller()
+		if err != nil {
+			return result, err
+		}
+		if _, err := m.runner.Run(ctx, installer, args...); err != nil {
+			return result, fmt.Errorf("install claude-swap: %w", err)
+		}
+		if _, err := m.runner.LookPath(m.claudeBinary); err != nil {
+			return result, fmt.Errorf("cswap was installed but is not executable: %w", err)
+		}
+		result.Installed = true
+	}
+
+	count, err := m.csSwapAccountCount(ctx)
+	if err != nil {
+		return result, err
+	}
+	if count > 0 {
+		result.AccountCount = count
+		return result, nil
+	}
+	if _, err := m.runner.Run(ctx, m.claudeBinary, "add"); err != nil {
+		return result, fmt.Errorf("%w: %v", ErrClaudeLoginRequired, err)
+	}
+	count, err = m.csSwapAccountCount(ctx)
+	if err != nil {
+		return result, err
+	}
+	if count == 0 {
+		return result, ErrClaudeLoginRequired
+	}
+	result.AccountAdded = true
+	result.AccountCount = count
+	return result, nil
+}
+
+func (m *Manager) csSwapInstaller() (string, []string, error) {
+	if _, err := m.runner.LookPath("uv"); err == nil {
+		return "uv", []string{"tool", "install", "claude-swap"}, nil
+	}
+	if _, err := m.runner.LookPath("pipx"); err == nil {
+		return "pipx", []string{"install", "claude-swap"}, nil
+	}
+	return "", nil, ErrCswapInstallerMissing
+}
+
+func (m *Manager) csSwapAccountCount(ctx context.Context) (int, error) {
+	output, err := m.runner.Run(ctx, m.claudeBinary, "list", "--json")
+	if err != nil {
+		return 0, fmt.Errorf("inspect cswap accounts: %w", err)
+	}
+	var payload struct {
+		SchemaVersion int               `json:"schemaVersion"`
+		Accounts      []json.RawMessage `json:"accounts"`
+		Error         json.RawMessage   `json:"error"`
+	}
+	if err := json.Unmarshal(output.Stdout, &payload); err != nil {
+		return 0, errors.New("cswap returned invalid JSON while checking setup")
+	}
+	if payload.SchemaVersion != 1 || len(payload.Error) > 0 && string(payload.Error) != "null" {
+		return 0, errors.New("cswap could not report its account setup")
+	}
+	return len(payload.Accounts), nil
 }
 
 func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) error {

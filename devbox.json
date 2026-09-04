@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.18.0/.schema/devbox.schema.json",
+  "packages": [
+    "go@1.25",
+    "nodejs@22",
+    "uv@0.11.32",
+    "wails@2.14.0",
+    "pkg-config@latest",
+    "gtk3@latest",
+    "webkitgtk_4_1@latest",
+    "imagemagick@latest",
+    "dpkg@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      "export PATH=\"$HOME/.local/bin:$PATH\""
+    ],
+    "scripts": {
+      "bootstrap": [
+        "npm ci --prefix web",
+        "npm ci --prefix docs"
+      ],
+      "test": [
+        "make test"
+      ],
+      "lint": [
+        "make lint"
+      ],
+      "build": [
+        "make build"
+      ],
+      "desktop-build": [
+        "make desktop-build"
+      ],
+      "package-deb": [
+        "make package-deb"
+      ],
+      "setup-cswap": [
+        "go run ./cmd/quotadeck setup cswap"
+      ]
+    }
+  }
+}

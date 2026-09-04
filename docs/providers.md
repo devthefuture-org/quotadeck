@@ -4,14 +4,15 @@ QuotaDeck discovers quota metadata through provider-supported local tools and en
 
 ## Claude
 
-Claude multi-account discovery uses [`cswap`](https://github.com/dean0x/cswap) as its canonical source:
+Claude multi-account discovery uses [`cswap`](https://github.com/realiti4/claude-swap) as its canonical source. QuotaDeck can install and initialize it with the supported `uv`/`pipx` flow:
 
 ```bash
+quotadeck setup cswap
 cswap list --json
 quotadeck doctor
 ```
 
-QuotaDeck reads public account slots and usage data. The **Plans** screen can activate one of them by calling `cswap switch <slot> --json`. It never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
+The same action is available as **Install & set up** on the **Plans** screen. If no cswap account exists, setup invokes `cswap add` so cswap—not QuotaDeck—imports the current Claude Code login. QuotaDeck then reads public account slots and usage data. The **Plans** screen can activate one of them by calling `cswap switch <slot> --json`. It never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
 
 ## Codex
 

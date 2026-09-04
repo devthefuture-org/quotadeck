@@ -132,6 +132,7 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .plan-options { display: grid; gap: 8px; margin-top: 20px; }
 .plan-option { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 15px; padding: 15px; background: rgba(17,19,15,.32); }
 .plan-option.selected { border-color: #53663a; background: rgba(201,247,96,.045); }
+.plan-option.setup-option { border-style: dashed; background: rgba(122,183,255,.045); }
 .plan-option span, .plan-option strong, .plan-option small { display: block; }
 .plan-option span { color: var(--acid); font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
 .plan-option strong { margin: 5px 0 3px; overflow-wrap: anywhere; }

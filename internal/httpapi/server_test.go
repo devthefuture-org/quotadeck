@@ -22,6 +22,8 @@ type fakeController struct {
 	switched string
 	apiKey   string
 	activate bool
+	setup    control.ClaudeSetupResult
+	setupErr error
 }
 
 type slowUnrelatedProvider struct{}
@@ -49,6 +51,10 @@ func (f *fakeController) Status(states []domain.AccountState) control.Status {
 func (f *fakeController) SwitchClaude(_ context.Context, accountID string) error {
 	f.switched = accountID
 	return nil
+}
+
+func (f *fakeController) SetupClaude(context.Context) (control.ClaudeSetupResult, error) {
+	return f.setup, f.setupErr
 }
 
 func (f *fakeController) ConfigureZAI(_ context.Context, apiKey string, activate bool) error {
@@ -172,5 +178,36 @@ func TestClaudeSwitchRespondsWithoutWaitingForUnrelatedProviders(t *testing.T) {
 	}
 	if response.Refresh != "queued" || response.Control.Claude.ActiveAccountID != "claude:cswap:2" {
 		t.Fatalf("unexpected immediate control response: %#v", response)
+	}
+}
+
+func TestClaudeSetupRequiresGuardAndReturnsRedactedResult(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	engine := poller.New(database, nil, time.Minute, time.Second, 30)
+	controller := &fakeController{setup: control.ClaudeSetupResult{Installed: true, AccountAdded: true, AccountCount: 1}}
+	server := New(engine, doctor.Collector{Config: config.Default(), Version: "test"}, controller)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/control/claude/setup", nil)
+	request.RemoteAddr = "127.0.0.1:12345"
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("setup without guard returned %d", recorder.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/control/claude/setup", nil)
+	request.RemoteAddr = "127.0.0.1:12345"
+	request.Header.Set("X-QuotaDeck-Request", "control")
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("setup returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"accountCount":1`)) {
+		t.Fatalf("setup result missing: %s", recorder.Body.String())
 	}
 }

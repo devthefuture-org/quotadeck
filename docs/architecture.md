@@ -38,6 +38,7 @@ See [ADR 0002](./adr/0002-domain-model) for the decision record.
 | `GET` | `/api/v1/events` | Server-Sent Events stream |
 | `GET` | `/api/v1/control` | Redacted active-plan status |
 | `POST` | `/api/v1/refresh` | Loopback-only manual refresh |
+| `POST` | `/api/v1/control/claude/setup` | Install/initialize cswap for the current user |
 | `POST` | `/api/v1/control/claude/switch` | Activate a validated cswap account |
 | `PUT` | `/api/v1/control/zai` | Save and optionally activate Z.ai |
 

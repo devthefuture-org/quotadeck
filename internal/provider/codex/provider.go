@@ -18,6 +18,7 @@ import (
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
+	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
 
 type Provider struct {
@@ -36,7 +37,7 @@ func (p *Provider) ID() string   { return "codex" }
 func (p *Provider) Name() string { return "OpenAI Codex" }
 
 func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error) {
-	if _, err := exec.LookPath(p.binary); err != nil {
+	if _, err := runner.LookPath(p.binary); err != nil {
 		return nil, &domain.CodedError{Code: "codex_not_found", Err: errors.New("codex executable not found")}
 	}
 	accounts := append([]config.CodexAccountConfig(nil), p.accounts...)
@@ -145,8 +146,12 @@ func Parse(accountJSON, limitsJSON []byte, candidate domain.AccountCandidate) (d
 func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error) {
 	childContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	command := exec.CommandContext(childContext, p.binary, "app-server", "--stdio")
-	command.Env = envWith(os.Environ(), "CODEX_HOME", home)
+	binary, err := runner.LookPath(p.binary)
+	if err != nil {
+		return nil, nil, &domain.CodedError{Code: "codex_not_found", Err: errors.New("codex executable not found")}
+	}
+	command := exec.CommandContext(childContext, binary, "app-server", "--stdio")
+	command.Env = envWith(runner.CommandEnvironment(), "CODEX_HOME", home)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("open Codex stdin")}

@@ -16,7 +16,9 @@ import (
 
 	"github.com/devthefuture-org/quotadeck/internal/application"
 	"github.com/devthefuture-org/quotadeck/internal/config"
+	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
+	"github.com/devthefuture-org/quotadeck/internal/runner"
 	"github.com/devthefuture-org/quotadeck/internal/service"
 )
 
@@ -42,6 +44,8 @@ func run(args []string) error {
 		return apiCommand(args[1:], false)
 	case "refresh":
 		return apiCommand(args[1:], true)
+	case "setup":
+		return setupCommand(args[1:])
 	case "service":
 		return serviceCommand(args[1:])
 	case "version", "--version", "-v":
@@ -53,6 +57,40 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func setupCommand(args []string) error {
+	if len(args) == 0 || args[0] != "cswap" {
+		return errors.New("setup requires cswap")
+	}
+	flags := flag.NewFlagSet("setup cswap", flag.ContinueOnError)
+	configPath := flags.String("config", config.DefaultPath(), "configuration file")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	manager := control.New(
+		cfg.Providers.Claude.Binary,
+		runner.ExecRunner{},
+		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	result, err := manager.SetupClaude(ctx)
+	if err != nil {
+		return err
+	}
+	if result.Installed {
+		fmt.Println("installed claude-swap with its supported user-level installer")
+	}
+	if result.AccountAdded {
+		fmt.Println("added the current Claude Code login to cswap")
+	}
+	fmt.Printf("cswap ready (%d account(s))\n", result.AccountCount)
+	return nil
 }
 
 func serve(args []string) error {
@@ -228,6 +266,7 @@ func printHelp() {
 Usage:
   quotadeck serve [--bind 127.0.0.1] [--port 9211]
   quotadeck doctor [--json]
+  quotadeck setup cswap
   quotadeck refresh
   quotadeck status [--json]
   quotadeck service install --user

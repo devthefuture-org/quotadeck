@@ -12,6 +12,14 @@ sudo apt install ./quotadeck_0.1.0_amd64.deb
 
 Open **QuotaDeck** from the application menu. The package includes the daemon, desktop application, systemd user unit, and Cinnamon applet.
 
+Open **Plans** and choose **Install & set up** to prepare `cswap`, or run the equivalent CLI command:
+
+```bash
+quotadeck setup cswap
+```
+
+QuotaDeck uses the package's `pipx` dependency (or an existing `uv`) to install `claude-swap` for the current user. If no account exists yet, it asks `cswap` to add the current Claude Code login; sign in to Claude Code first.
+
 ## Portable AppImage
 
 Download `QuotaDeck-<version>-x86_64.AppImage`, make it executable, and launch it:
@@ -43,7 +51,21 @@ quotadeck status --json
 
 `doctor` reports only paths, versions, source decisions, and secret-presence booleans. It never prints a provider token. Continue with [provider setup](./providers) if a source is missing.
 
-## Build from source
+## Build from source with Devbox
+
+The repository's Devbox environment pins the complete build toolchain:
+
+```bash
+git clone https://github.com/devthefuture-org/quotadeck.git
+cd quotadeck
+devbox run bootstrap
+devbox run test
+devbox run build
+```
+
+Use `devbox run setup-cswap` to install and initialize `cswap` in the same portable environment.
+
+## Build from source without Devbox
 
 Building requires Go 1.25+, Node.js 22+, and npm:
 

@@ -53,7 +53,7 @@ printf '%s\n' \
   'Section: utils' \
   'Priority: optional' \
   "Installed-Size: $installed_size" \
-  'Depends: libgtk-3-0 | libgtk-3-0t64, libwebkit2gtk-4.1-0, libsoup-3.0-0' \
+  'Depends: libgtk-3-0 | libgtk-3-0t64, libwebkit2gtk-4.1-0, libsoup-3.0-0, pipx' \
   'Description: Local multi-provider AI quota dashboard' \
   ' Includes the CLI service, Wails desktop application, and Cinnamon applet.' \
   > "$package_root/DEBIAN/control"
