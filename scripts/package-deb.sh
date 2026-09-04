@@ -7,6 +7,8 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 package_root="$(mktemp -d)"
 trap 'rm -rf "$package_root"' EXIT
 
+"$project_root/scripts/check-desktop-linkage.sh" "$project_root/dist/quotadeck-desktop-linux-amd64"
+
 mkdir -p \
   "$package_root/DEBIAN" \
   "$package_root/usr/bin" \

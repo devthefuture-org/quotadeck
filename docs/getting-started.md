@@ -53,7 +53,7 @@ quotadeck status --json
 
 ## Build from source with Devbox
 
-The repository's Devbox environment pins the complete build toolchain:
+The repository's Devbox environment pins the language and packaging toolchain:
 
 ```bash
 git clone https://github.com/devthefuture-org/quotadeck.git
@@ -64,6 +64,8 @@ devbox run build
 ```
 
 Use `devbox run setup-cswap` to install and initialize `cswap` in the same portable environment.
+
+The Wails desktop executable is intentionally compiled with the host C compiler and host GTK/WebKitGTK development files, including when the build runs from Devbox. This prevents a Debian package from retaining `/nix/store` interpreter or library paths. On Debian/Ubuntu, install `build-essential`, `pkg-config`, `libgtk-3-dev`, and `libwebkit2gtk-4.1-dev` before running `devbox run package-deb`.
 
 ## Build from source without Devbox
 
@@ -77,4 +79,4 @@ make test build
 ./dist/quotadeck serve
 ```
 
-Native desktop and package builds additionally require Wails v2, GTK 3, WebKitGTK 4.1, ImageMagick, and `dpkg-deb`.
+Native desktop and package builds additionally require GTK 3 and WebKitGTK 4.1 development files, ImageMagick, and `dpkg-deb`. The Wails Go module is pinned by `go.mod`; a separate Wails CLI installation is not required.

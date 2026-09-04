@@ -59,15 +59,15 @@ Full setup instructions live in the [provider guide](https://devthefuture-org.gi
 
 ## Build and run
 
-The recommended development environment is [Devbox](https://www.jetify.com/devbox), which pins Go, Node.js, Wails, GTK/WebKitGTK, ImageMagick, `uv`, and Debian packaging tools:
+The recommended development environment is [Devbox](https://www.jetify.com/devbox), which pins Go, Node.js, ImageMagick, `uv`, and Debian packaging tools:
 
 ```bash
 devbox run bootstrap
 devbox run test
-devbox run -- make package-deb VERSION=0.2.8
+devbox run -- make package-deb VERSION=0.2.9
 ```
 
-Without Devbox, requirements are Go 1.25+, Node.js 22+, and npm. Linux desktop packaging additionally needs Wails v2, GTK 3, WebKitGTK 4.1, ImageMagick, and `dpkg-deb`.
+Linux desktop builds deliberately use the host C compiler and GTK/WebKitGTK development libraries, even when invoked through Devbox. This keeps `.deb` executables linked to distribution libraries instead of the machine-specific Nix store. On Debian/Ubuntu, install `build-essential`, `pkg-config`, `libgtk-3-dev`, and `libwebkit2gtk-4.1-dev`. Without Devbox, Go 1.25+, Node.js 22+, npm, ImageMagick, and `dpkg-deb` are also required.
 
 ```bash
 npm ci --prefix web

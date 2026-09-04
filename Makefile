@@ -1,11 +1,9 @@
 SHELL := /bin/bash
 VERSION ?= 0.1.0
 GO_ENV := GOCACHE=/tmp/quotadeck-go-cache GOMODCACHE=/tmp/quotadeck-go-mod
-DESKTOP_GO_ENV := GOCACHE=/tmp/quotadeck-go-cache
-WAILS ?= $(shell command -v wails 2>/dev/null || printf '%s/bin/wails' "$$(go env GOPATH)")
-PKG_CONFIG ?= pkg-config
-PKG_CONFIG_PATH ?= /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-PKG_CONFIG_ENV := PKG_CONFIG=$(PKG_CONFIG) PKG_CONFIG_PATH=$(PKG_CONFIG_PATH)
+DESKTOP_GO ?= $(shell command -v go)
+DESKTOP_HOST_PATH ?= /usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+DESKTOP_PKG_CONFIG_PATH ?= /usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig
 
 .PHONY: dev demo web-build docs-dev docs-build test test-race lint build desktop-icon desktop-build package-cinnamon package-appimage package-deb package-release clean
 
@@ -47,8 +45,12 @@ cmd/quotadeck-desktop/appicon.png: packaging/desktop/quotadeck.svg
 
 desktop-build: web-build desktop-icon
 	mkdir -p dist
-	cd cmd/quotadeck-desktop && $(DESKTOP_GO_ENV) $(PKG_CONFIG_ENV) $(WAILS) build -tags "desktop,webkit2_41" -platform linux/amd64 -trimpath -skipbindings -s -m -nosyncgomod -ldflags "-s -w -X main.version=$(VERSION)" -o quotadeck-desktop-linux-amd64
-	install -m 0755 cmd/quotadeck-desktop/build/bin/quotadeck-desktop-linux-amd64 dist/quotadeck-desktop-linux-amd64
+	env -i HOME="$(HOME)" USER="$(USER)" LOGNAME="$(LOGNAME)" LANG="$${LANG:-C.UTF-8}" PATH="$(DESKTOP_HOST_PATH)" \
+		GOCACHE=/tmp/quotadeck-go-cache CGO_ENABLED=1 CC=/usr/bin/gcc CXX=/usr/bin/g++ \
+		PKG_CONFIG=/usr/bin/pkg-config PKG_CONFIG_PATH="$(DESKTOP_PKG_CONFIG_PATH)" \
+		"$(DESKTOP_GO)" build -buildvcs=false -trimpath -tags "desktop,production,webkit2_41" \
+		-ldflags "-s -w -X main.version=$(VERSION)" -o dist/quotadeck-desktop-linux-amd64 ./cmd/quotadeck-desktop
+	./scripts/check-desktop-linkage.sh dist/quotadeck-desktop-linux-amd64
 
 package-cinnamon:
 	VERSION=$(VERSION) ./scripts/package-cinnamon.sh
