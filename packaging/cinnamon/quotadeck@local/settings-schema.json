@@ -12,11 +12,11 @@
     "columns": [
       {
         "id": "indicator",
-        "title": "Provider · account · quota window",
+        "title": "Provider \u00b7 account \u00b7 quota window",
         "type": "string",
         "default": "auto",
         "options": {
-          "Automatic — tightest available": "auto"
+          "Automatic \u2014 tightest available": "auto"
         }
       }
     ]
@@ -28,5 +28,21 @@
   "display-window": {
     "type": "generic",
     "default": "auto"
+  },
+  "threshold-alert-enabled": {
+    "type": "switch",
+    "default": true,
+    "description": "Show a warning icon at the usage threshold",
+    "tooltip": "Applies to the quota indicators shown in the panel. Claude icons show a red ring when their 5-hour quota is exhausted."
+  },
+  "threshold-alert-percent": {
+    "type": "spinbutton",
+    "default": 80,
+    "min": 1,
+    "max": 100,
+    "step": 1,
+    "units": "% used",
+    "description": "Warning threshold",
+    "dependency": "threshold-alert-enabled"
   }
 }

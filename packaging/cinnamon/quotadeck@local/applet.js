@@ -49,6 +49,8 @@ class QuotaDeckApplet extends Applet.Applet {
         this._migrateLegacySettings(metadata.uuid, instanceId);
         this._settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
         this._settings.bind('display-indicators', 'displayIndicators', () => this._onDisplaySelectionChanged());
+        this._settings.bind('threshold-alert-enabled', 'thresholdAlertEnabled', () => this._onDisplaySelectionChanged());
+        this._settings.bind('threshold-alert-percent', 'thresholdAlertPercent', () => this._onDisplaySelectionChanged());
 
         this._renderLoading();
         this._loadState();
@@ -154,8 +156,7 @@ class QuotaDeckApplet extends Applet.Applet {
             }
             this._control = control;
             if (this._state) {
-                const accounts = Array.isArray(this._state.accounts) ? this._state.accounts : [];
-                this._renderMenu(accounts);
+                this._renderState(this._state);
             }
         });
     }
@@ -234,6 +235,12 @@ class QuotaDeckApplet extends Applet.Applet {
         const accounts = Array.isArray(state.accounts) ? state.accounts : [];
         this._refreshSettingsOptions(accounts);
         const indicators = this._selectIndicators(accounts);
+        const selected = accounts.find(item => this._isSelectedClaude(item));
+        // Keep a blocked active plan visible even when only other quotas are configured.
+        if (selected && this._blockedWindow(selected) && !indicators.some(indicator => indicator.item === selected)) {
+            const window = this._blockedWindow(selected);
+            indicators.push({ item: selected, window, used: this._usedPercent(window) });
+        }
         this._renderPanelIndicators(indicators);
         const summaries = indicators.length === 0
             ? [_('No actionable quota window')]
@@ -290,23 +297,31 @@ class QuotaDeckApplet extends Applet.Applet {
         indicators.forEach(indicator => {
             const provider = ((indicator.item || {}).account || {}).providerId;
             const text = indicator.used === null ? '—' : Math.round(indicator.used) + '%';
-            this._indicatorBox.add_actor(this._indicatorActor(provider, text, this._indicatorLevel(indicator)));
+            this._indicatorBox.add_actor(this._indicatorActor(provider, text, this._indicatorLevel(indicator), indicator));
         });
     }
 
-    _indicatorActor(provider, text, level) {
+    _indicatorActor(provider, text, level, indicator = null) {
         const supported = ['claude', 'codex', 'zai'];
-        const filename = supported.includes(provider)
-            ? 'icon-' + provider + '-symbolic.svg'
+        const blocked = indicator && this._blockedWindow(indicator.item);
+        const filename = blocked ? 'icon-claude-blocked.svg' : supported.includes(provider)
+            ? 'icon-' + provider + '.svg'
             : 'icon-symbolic.svg';
-        const box = new St.BoxLayout({ style_class: 'quotadeck-indicator quotadeck-' + level });
+        const selected = indicator && this._isSelectedClaude(indicator.item);
+        const box = new St.BoxLayout({
+            style_class: 'quotadeck-indicator quotadeck-' + level + (selected ? ' quotadeck-selected-indicator' : ''),
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'border: 2px solid ' + (selected ? '#7ab7ff' : 'transparent')
+                + '; border-radius: 6px; padding: 2px 4px;'
+                + (selected ? ' background-color: #253b50;' : ''),
+        });
         const icon = new St.Icon({
             gicon: new Gio.FileIcon({
                 file: Gio.File.new_for_path(GLib.build_filenamev([this._metadata.path, filename])),
             }),
-            icon_type: St.IconType.SYMBOLIC,
+            icon_type: supported.includes(provider) ? St.IconType.FULLCOLOR : St.IconType.SYMBOLIC,
             icon_size: this._panelIconSize,
-            style_class: 'quotadeck-provider-icon',
+            style_class: 'quotadeck-provider-icon quotadeck-provider-' + (provider || 'default'),
         });
         const label = new St.Label({
             text,
@@ -315,7 +330,43 @@ class QuotaDeckApplet extends Applet.Applet {
         });
         box.add_actor(icon);
         box.add_actor(label);
+        if (!blocked && indicator && this._thresholdReached(indicator)) {
+            box.add_actor(new St.Icon({
+                icon_name: 'dialog-warning-symbolic',
+                icon_type: St.IconType.SYMBOLIC,
+                icon_size: this._panelIconSize,
+                style_class: 'quotadeck-alert-icon',
+            }));
+        }
         return box;
+    }
+
+    _isSelectedClaude(item) {
+        const account = (item || {}).account || {};
+        return Boolean(this._control && this._control.mode === 'claude'
+            && account.providerId === 'claude' && account.id
+            && account.id === (this._control.claude || {}).activeAccountId);
+    }
+
+    _blockedWindow(item) {
+        const snapshot = (item || {}).snapshot || {};
+        if (((item || {}).account || {}).providerId !== 'claude' || snapshot.stale) {
+            return null;
+        }
+        return (Array.isArray(snapshot.windows) ? snapshot.windows : []).find(window => {
+            if (window.id !== 'five-hour' || this._usedPercent(window) !== 100) {
+                return false;
+            }
+            // A past reset must not leave a misleading red ring on the panel.
+            return !window.resetsAt || new Date(window.resetsAt).getTime() > Date.now();
+        }) || null;
+    }
+
+    _thresholdReached(indicator) {
+        const threshold = Number.isFinite(this.thresholdAlertPercent)
+            ? Math.max(1, Math.min(100, this.thresholdAlertPercent)) : 80;
+        return this.thresholdAlertEnabled && !((indicator.item || {}).snapshot || {}).stale
+            && indicator.used !== null && indicator.used >= threshold;
     }
 
     _indicatorLevel(indicator) {
@@ -476,7 +527,21 @@ class QuotaDeckApplet extends Applet.Applet {
         const windowLabel = indicator.window.label || indicator.window.id;
         const details = [plan, windowLabel].filter(Boolean).join(' · ');
         const used = indicator.used === null ? _('No percentage') : Math.round(indicator.used) + _('% used');
-        return details ? used + ' · ' + details : used;
+        const notes = [details ? used + ' · ' + details : used];
+        if (this._isSelectedClaude(indicator.item)) {
+            notes.push(_('Selected Claude Code plan'));
+        }
+        const blocked = this._blockedWindow(indicator.item);
+        if (blocked) {
+            notes.push(_('Blocked by the 5-hour window') + (blocked.resetsAt ? ' · ' + this._formatReset(blocked.resetsAt) : ''));
+        }
+        if (this._thresholdReached(indicator)) {
+            notes.push(_('Alert threshold reached'));
+        }
+        if ((indicator.item.snapshot || {}).stale) {
+            notes.push(_('Stale quota data'));
+        }
+        return notes.join(' · ');
     }
 
     _addAccount(item) {
@@ -559,6 +624,9 @@ class QuotaDeckApplet extends Applet.Applet {
         const reset = new Date(raw);
         if (Number.isNaN(reset.getTime())) {
             return _('reset unknown');
+        }
+        if (reset.getTime() <= Date.now()) {
+            return _('reset time passed · awaiting refresh');
         }
         const seconds = Math.max(0, Math.round((reset.getTime() - Date.now()) / 1000));
         if (seconds < 3600) {

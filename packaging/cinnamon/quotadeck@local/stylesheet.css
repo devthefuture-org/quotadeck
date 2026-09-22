@@ -8,6 +8,7 @@
 
 .quotadeck-indicator {
     spacing: 4px;
+
 }
 
 .quotadeck-provider-icon {
@@ -58,3 +59,5 @@
 .quotadeck-window-muted {
     color: #9da391;
 }
+
+.quotadeck-alert-icon { color: #f4c95d; }
