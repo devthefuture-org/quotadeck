@@ -12,9 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
@@ -115,7 +118,13 @@ func Parse(accountJSON, limitsJSON []byte, candidate domain.AccountCandidate) (d
 	}
 	windows := make([]domain.QuotaWindow, 0)
 	if len(limits.RateLimitsByLimitID) > 0 {
-		for limitID, snapshot := range limits.RateLimitsByLimitID {
+		limitIDs := make([]string, 0, len(limits.RateLimitsByLimitID))
+		for limitID := range limits.RateLimitsByLimitID {
+			limitIDs = append(limitIDs, limitID)
+		}
+		sort.Strings(limitIDs)
+		for _, limitID := range limitIDs {
+			snapshot := limits.RateLimitsByLimitID[limitID]
 			windows = append(windows, rateLimitWindows(limitID, snapshot)...)
 			if account.Plan == "" {
 				account.Plan = snapshot.PlanType
@@ -152,34 +161,50 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 	}
 	command := exec.CommandContext(childContext, binary, "app-server", "--stdio")
 	command.Env = envWith(runner.CommandEnvironment(), "CODEX_HOME", home)
+	// npm launchers spawn the real Codex binary. Cancel that whole process
+	// group so a surviving child cannot hold the RPC pipes open indefinitely.
+	configureProcessGroup(command)
+	command.WaitDelay = time.Second
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("open Codex stdin")}
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("open Codex stdout")}
 	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	stderr := &syncBuffer{}
+	command.Stderr = stderr
 	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("start Codex app-server")}
 	}
 	defer func() {
 		cancel()
+		_ = stdin.Close()
+		_ = stdout.Close()
 		_ = command.Wait()
 	}()
+	// Stdio reads/writes do not observe context cancellation themselves.
+	// Close them explicitly even if a descendant escaped the process group.
+	stopClosing := context.AfterFunc(childContext, func() {
+		_ = stdin.Close()
+		_ = stdout.Close()
+	})
+	defer stopClosing()
 	encoder := json.NewEncoder(stdin)
 	if err := encoder.Encode(map[string]any{
 		"id": 1, "method": "initialize",
 		"params": map[string]any{"clientInfo": map[string]string{"name": "quotadeck", "title": "QuotaDeck", "version": "0.1.0"}},
 	}); err != nil {
-		return nil, nil, &domain.CodedError{Code: "codex_rpc_failed", Err: errors.New("write Codex initialize request")}
+		return nil, nil, rpcFailure(home, stderr, errors.New("write Codex initialize request"))
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	if _, err := responseByID(scanner, 1); err != nil {
-		return nil, nil, &domain.CodedError{Code: "codex_rpc_failed", Err: err}
+		return nil, nil, rpcFailure(home, stderr, err)
 	}
 	for _, message := range []map[string]any{
 		{"method": "initialized"},
@@ -187,14 +212,14 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 		{"id": 3, "method": "account/rateLimits/read", "params": nil},
 	} {
 		if err := encoder.Encode(message); err != nil {
-			return nil, nil, &domain.CodedError{Code: "codex_rpc_failed", Err: errors.New("write Codex request")}
+			return nil, nil, rpcFailure(home, stderr, errors.New("write Codex request"))
 		}
 	}
 	accountResult, limitsResult := []byte(nil), []byte(nil)
 	for accountResult == nil || limitsResult == nil {
 		response, err := nextResponse(scanner)
 		if err != nil {
-			return nil, nil, &domain.CodedError{Code: "codex_rpc_failed", Err: err}
+			return nil, nil, rpcFailure(home, stderr, err)
 		}
 		switch response.ID {
 		case 2:
@@ -238,14 +263,134 @@ func nextResponse(scanner *bufio.Scanner) (rpcResponse, error) {
 			continue
 		}
 		if response.Error != nil {
-			return response, fmt.Errorf("Codex RPC error %d", response.Error.Code)
+			return response, &rpcError{Code: response.Error.Code, Message: response.Error.Message}
 		}
 		return response, nil
 	}
 	if err := scanner.Err(); err != nil {
-		return rpcResponse{}, errors.New("read Codex app-server response")
+		return rpcResponse{}, fmt.Errorf("read Codex app-server response: %w", err)
 	}
 	return rpcResponse{}, errors.New("Codex app-server closed before responding")
+}
+
+// rpcError carries the app-server's own wording. Codex answers with a generic
+// JSON-RPC internal error for causes as different as an expired ChatGPT session
+// and a backend outage, so the message is the only distinguishing signal.
+type rpcError struct {
+	Code    int
+	Message string
+}
+
+func (e *rpcError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("Codex RPC error %d", e.Code)
+	}
+	return fmt.Sprintf("Codex RPC error %d: %s", e.Code, truncate(e.Message, 400))
+}
+
+// rpcFailure keeps the upstream wording whatever it says, and additionally
+// upgrades the error code when that wording names an expired session, so the UI
+// can name the fix. The propagated message is the guarantee; the match below is
+// a convenience, and an unrecognised wording still reaches the user intact.
+func rpcFailure(home string, stderr *syncBuffer, err error) error {
+	var rpc *rpcError
+	if errors.As(err, &rpc) {
+		if mentionsExpiredAuth(rpc.Message) {
+			return expiredSession(home, truncate(rpc.Message, 400))
+		}
+		return &domain.CodedError{Code: "codex_rpc_failed", Err: err}
+	}
+	// A startup crash or a dead pipe says nothing on stdout; the cause is on
+	// stderr, which exec fills from a goroutine of its own.
+	tail := stderr.lastLine()
+	if tail == "" {
+		return &domain.CodedError{Code: "codex_rpc_failed", Err: err}
+	}
+	if mentionsExpiredAuth(tail) {
+		return expiredSession(home, tail)
+	}
+	return &domain.CodedError{Code: "codex_rpc_failed", Err: fmt.Errorf("%w: %s", err, tail)}
+}
+
+// The remediation leads the message: the poller truncates it at 240 bytes.
+func expiredSession(home, cause string) error {
+	return &domain.CodedError{Code: "codex_auth_required", Err: fmt.Errorf(
+		"Codex session expired for CODEX_HOME %s, run `codex login`: %s", home, cause)}
+}
+
+func mentionsExpiredAuth(message string) bool {
+	lowered := strings.ToLower(message)
+	for _, marker := range []string{"401", "unauthorized", "token_expired", "invalid_refresh_token", "please try signing in again", "log out and sign in again"} {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + "…"
+}
+
+// syncBuffer collects the child's stderr, which exec writes from a goroutine of
+// its own while the RPC loop reads it.
+type syncBuffer struct {
+	mutex  sync.Mutex
+	buffer bytes.Buffer
+}
+
+const stderrCapacity = 8 << 10
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if remaining := stderrCapacity - b.buffer.Len(); remaining > 0 {
+		if len(data) > remaining {
+			b.buffer.Write(data[:remaining])
+		} else {
+			b.buffer.Write(data)
+		}
+	}
+	return len(data), nil
+}
+
+// lastLine returns the most recent non-empty stderr line, stripped of the ANSI
+// styling the Codex tracing layer emits.
+func (b *syncBuffer) lastLine() string {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	lines := strings.Split(b.buffer.String(), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if line := truncate(stripANSI(lines[index]), 200); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func stripANSI(value string) string {
+	var builder strings.Builder
+	for index := 0; index < len(value); index++ {
+		if value[index] == 0x1b {
+			for index++; index < len(value) && !isANSITerminator(value[index]); index++ {
+			}
+			continue
+		}
+		builder.WriteByte(value[index])
+	}
+	return builder.String()
+}
+
+func isANSITerminator(character byte) bool {
+	return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
 }
 
 type getRateLimitsResponse struct {
