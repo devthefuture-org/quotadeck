@@ -226,11 +226,28 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 			return nil, nil, rpcFailure(home, stderrTail, errors.New("write Codex request"))
 		}
 	}
-	accountResult, limitsResult := []byte(nil), []byte(nil)
-	for accountResult == nil || limitsResult == nil {
+	// Collect both answers before concluding. A per-request error must not end
+	// the read: the other request carries the signal that names the cause, and
+	// the app-server answers them in either order.
+	var accountResult, limitsResult []byte
+	var accountErr, limitsErr error
+	for (accountResult == nil && accountErr == nil) || (limitsResult == nil && limitsErr == nil) {
 		response, err := nextResponse(scanner)
 		if err != nil {
-			return nil, nil, rpcFailure(home, stderrTail, err)
+			var rpc *rpcError
+			if !errors.As(err, &rpc) {
+				// The stream itself failed; nothing further can arrive.
+				return nil, nil, rpcFailure(home, stderrTail, err)
+			}
+			switch response.ID {
+			case 2:
+				accountErr = err
+			case 3:
+				limitsErr = err
+			default:
+				return nil, nil, rpcFailure(home, stderrTail, err)
+			}
+			continue
 		}
 		switch response.ID {
 		case 2:
@@ -240,7 +257,30 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 		}
 	}
 	_ = stdin.Close()
+	if accountErr != nil {
+		return nil, nil, rpcFailure(home, stderrTail, accountErr)
+	}
+	if limitsErr != nil {
+		// A CODEX_HOME that was never signed in returns a null account and fails
+		// the rate-limit read with wording of its own. The null account is the
+		// structured signal, and it decides regardless of that wording.
+		if accountAbsent(accountResult) {
+			return nil, nil, &domain.CodedError{Code: "codex_auth_required", Err: fmt.Errorf(
+				"Codex has no account for CODEX_HOME %s, run `codex login`", home)}
+		}
+		return nil, nil, rpcFailure(home, stderrTail, limitsErr)
+	}
 	return accountResult, limitsResult, nil
+}
+
+func accountAbsent(accountJSON []byte) bool {
+	var payload struct {
+		Account *json.RawMessage `json:"account"`
+	}
+	if err := json.Unmarshal(accountJSON, &payload); err != nil {
+		return false
+	}
+	return payload.Account == nil || string(*payload.Account) == "null"
 }
 
 type rpcResponse struct {

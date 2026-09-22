@@ -117,3 +117,72 @@ func TestRPCSurfacesStderrWhenAppServerDiesSilently(t *testing.T) {
 		t.Fatalf("stderr cause was dropped: %v", err)
 	}
 }
+
+// A CODEX_HOME that was never signed in fails the rate-limit read with wording
+// that names no HTTP status, while account/read returns a null account. The
+// null account decides. Both arrival orders must reach the same verdict: the
+// app-server does not guarantee one.
+func TestRPCReportsNeverSignedInHome(t *testing.T) {
+	limitsError := `{"id":3,"error":{"code":-32600,"message":"codex account authentication required to read rate limits"}}`
+	accountNull := `{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}`
+	for _, order := range []struct {
+		name  string
+		first string
+		last  string
+	}{
+		{"limits error first", limitsError, accountNull},
+		{"account first", accountNull, limitsError},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			home := t.TempDir()
+			launcher := filepath.Join(home, "codex")
+			script := "#!/bin/sh\nread -r line\n" +
+				`printf '%s\n' '{"id":1,"result":{}}'` + "\n" +
+				"read -r line\nread -r line\nread -r line\n" +
+				"printf '%s\n' '" + order.first + "'\n" +
+				"printf '%s\n' '" + order.last + "'\n" +
+				"sleep 5\n"
+			if err := os.WriteFile(launcher, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			_, _, err := New(launcher, nil).rpc(ctx, home)
+
+			if code := domain.ErrorCode(err); code != "codex_auth_required" {
+				t.Fatalf("expected codex_auth_required, got %q (%v)", code, err)
+			}
+			if !strings.Contains(err.Error(), "codex login") {
+				t.Fatalf("expected the remediation in %v", err)
+			}
+		})
+	}
+}
+
+// An authenticated account whose rate-limit read fails must keep reporting the
+// rate-limit cause, not be reclassified as a missing account.
+func TestRPCKeepsLimitsFailureWhenAccountIsPresent(t *testing.T) {
+	home := t.TempDir()
+	launcher := filepath.Join(home, "codex")
+	script := "#!/bin/sh\nread -r line\n" +
+		`printf '%s\n' '{"id":1,"result":{}}'` + "\n" +
+		"read -r line\nread -r line\nread -r line\n" +
+		`printf '%s\n' '{"id":3,"error":{"code":-32603,"message":"backend is on fire"}}'` + "\n" +
+		`printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt","planType":"plus"}}}'` + "\n" +
+		"sleep 5\n"
+	if err := os.WriteFile(launcher, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	_, _, err := New(launcher, nil).rpc(ctx, home)
+
+	if code := domain.ErrorCode(err); code != "codex_rpc_failed" {
+		t.Fatalf("expected codex_rpc_failed, got %q (%v)", code, err)
+	}
+	if !strings.Contains(err.Error(), "backend is on fire") {
+		t.Fatalf("expected the upstream wording in %v", err)
+	}
+}
