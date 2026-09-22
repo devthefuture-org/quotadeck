@@ -75,10 +75,10 @@ When running `quotadeck serve` directly, expose the same variables in the proces
 
 ## Dashboard configuration
 
-The **Plans** screen provides the same setup without editing files manually:
+Open **Manage plans** on the dashboard for the same setup without editing files manually:
 
 - **Save key** updates `ZAI_API_KEY` in the private QuotaDeck environment file;
 - **Save & use Z.ai** also configures `~/.claude/settings.json` for the official Z.ai Anthropic endpoint;
-- choosing a Claude account removes the active Z.ai routing keys and runs `cswap switch` for the selected slot.
+- choosing **Use in Claude Code** on a quota card removes the active Z.ai routing keys and runs `cswap switch` for the selected slot.
 
 QuotaDeck never includes a stored key in API responses, diagnostics, logs, or SQLite. Leaving the key field blank keeps the already stored value.

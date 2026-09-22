@@ -12,7 +12,9 @@ sudo apt install ./quotadeck_0.1.0_amd64.deb
 
 Open **QuotaDeck** from the application menu. The package includes the daemon, desktop application, systemd user unit, and Cinnamon applet.
 
-Open **Plans** and choose **Install & set up** to prepare `cswap`, or run the equivalent CLI command:
+The Cinnamon applet uses orange and black for Claude, black on white for Codex, and white on black for Z.ai, each on a circular background. A light-blue rounded frame and slate-blue background highlight the selected Claude subscription’s icon and percentage. Right-click the applet and choose **Configure panel indicators** to enable or disable the warning icon and adjust its usage threshold (80% by default). A red ring surrounds the icon of any displayed Claude subscription that exhausts its 5-hour window, including when you display its weekly quota; if the selected account is blocked and hidden, its blocked 5-hour indicator appears automatically. Stale data and elapsed reset times do not trigger the red ring.
+
+Open **Manage plans** on the dashboard and choose **Install & set up** to prepare `cswap`, or run the equivalent CLI command:
 
 ```bash
 quotadeck setup cswap

@@ -12,7 +12,7 @@ cswap list --json
 quotadeck doctor
 ```
 
-The same action is available as **Install & set up** on the **Plans** screen. If no cswap account exists, setup invokes `cswap add` so cswap—not QuotaDeck—imports the current Claude Code login. QuotaDeck then reads public account slots and usage data. The **Plans** screen can activate one of them by calling `cswap switch <slot> --json`. It never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
+The same action is available as **Install & set up** under **Manage plans** on the dashboard. If no cswap account exists, setup invokes `cswap add` so cswap—not QuotaDeck—imports the current Claude Code login. QuotaDeck then reads public account slots and usage data. The **Use in Claude Code** button on each quota card activates that account by calling `cswap switch <slot> --json`. It never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
 
 ## Codex
 
@@ -37,14 +37,16 @@ Bearer credentials are read only from their configured private sources and attac
 
 ## Selecting the active Claude Code plan
 
-Open **Plans** in the dashboard to choose from one unified list containing:
+The dashboard groups quota usage and plan selection in the same view. Compare consumption and reset times, then select:
 
-- any enabled Claude subscription managed by `cswap`;
-- the Z.ai GLM Coding Plan.
+- **Use in Claude Code** on any enabled Claude subscription card managed by `cswap`;
+- **Use Z.ai in Claude Code** beside the Z.ai quotas to activate the configured GLM Coding Plan key.
+
+The selected Claude account is highlighted, and the current plan remains visible above the quota filters. **Manage plans** opens the setup panel on the same page.
 
 Selecting a Claude subscription removes only an active Z.ai endpoint and token from Claude Code settings, preserves unrelated settings, and delegates credential activation to `cswap`. If `cswap` fails, QuotaDeck restores the original settings file.
 
-For Z.ai, choose **Set up**, paste the API key once, then select it like any Claude subscription. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
+For Z.ai, open **Manage plans**, paste the API key once, then choose **Save & use Z.ai**. Later, use the button beside its quotas to select the stored key. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
 
 The selection applies to new Claude Code processes. Existing sessions retain the environment with which they started.
 
