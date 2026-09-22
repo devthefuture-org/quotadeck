@@ -1,5 +1,6 @@
 import { render } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useTheme } from './theme'
 import './styles.css'
 
 type Provider = { id: string; name: string; enabled: boolean; source: string }
@@ -54,18 +55,20 @@ type DoctorReport = {
   sources: { provider: string; source: string; accepted: boolean; reason: string; metadata?: Record<string, string> }[]
 }
 
-const providerOrder: Record<string, number> = { claude: 0, codex: 1, zai: 2 }
+const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2 }
 const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai' }
 
 function App() {
+  const { theme, selectTheme } = useTheme()
   const [state, setState] = useState<StateResponse | null>(null)
   const [error, setError] = useState('')
   const [providerFilter, setProviderFilter] = useState('all')
   const [accountFilter, setAccountFilter] = useState('all')
   const [mode, setMode] = useState<'used' | 'remaining'>('used')
   const [refreshing, setRefreshing] = useState(false)
-  const [view, setView] = useState<'dashboard' | 'plans' | 'diagnostics'>('dashboard')
+  const [view, setView] = useState<'dashboard' | 'diagnostics'>('dashboard')
   const [control, setControl] = useState<ControlState | null>(null)
+  const [setupOpen, setSetupOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   const load = useCallback(async () => {
@@ -83,10 +86,20 @@ function App() {
     }
   }, [])
 
+  const plans = usePlanControl(async next => {
+    setControl(next)
+    await load()
+  })
+  const selectedAccount = state?.accounts.find(item => item.account.id === control?.claude.activeAccountId)?.account
+  const selectedPlan = !control ? 'Plan selection unavailable'
+    : control.mode === 'zai' ? 'Z.ai · GLM Coding Plan'
+    : control.mode === 'claude' ? [selectedAccount?.label || 'Claude subscription', selectedAccount?.plan].filter(Boolean).join(' · ')
+    : 'No plan selected'
+
   useEffect(() => {
     void load()
     const events = new EventSource('/api/v1/events')
-	const fallback = window.setInterval(() => void load(), 60_000)
+    const fallback = window.setInterval(() => void load(), 60_000)
     let pending = 0
     events.addEventListener('update', () => {
       window.clearTimeout(pending)
@@ -95,7 +108,7 @@ function App() {
     events.onerror = () => setError('Live updates paused; reconnecting…')
     return () => {
       window.clearTimeout(pending)
-	  window.clearInterval(fallback)
+      window.clearInterval(fallback)
       events.close()
     }
   }, [load])
@@ -150,7 +163,14 @@ function App() {
           <div><p class="eyebrow">Local quota intelligence</p><h1>QuotaDeck</h1></div>
         </div>
         <div class="top-actions">
-          <button class={`quiet-button ${view === 'plans' ? 'selected' : ''}`} onClick={() => setView(value => value === 'plans' ? 'dashboard' : 'plans')}>{view === 'plans' ? 'Dashboard' : 'Plans'}</button>
+          <select class="theme-select" aria-label="Color theme" value={theme} onChange={event => {
+            const next = event.currentTarget.value
+            if (next === 'system' || next === 'light' || next === 'dark') selectTheme(next)
+          }}>
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
           <button class={`quiet-button ${view === 'diagnostics' ? 'selected' : ''}`} onClick={() => setView(value => value === 'diagnostics' ? 'dashboard' : 'diagnostics')}>{view === 'diagnostics' ? 'Dashboard' : 'Diagnostics'}</button>
           <button class="refresh-button" aria-label={refreshing ? 'Refreshing quotas' : 'Refresh quotas'} onClick={() => void refresh()} disabled={refreshing}>
             <span class={refreshing ? 'refresh-icon spinning' : 'refresh-icon'}>↻</span><span class="refresh-label">{refreshing ? 'Refreshing' : 'Refresh'}</span>
@@ -158,25 +178,32 @@ function App() {
         </div>
       </header>
 
-      {view === 'diagnostics' ? <Diagnostics /> : view === 'plans' ? (
-        <ControlCenter state={state} control={control} onChanged={setControl} />
-      ) : (
+      {view === 'diagnostics' ? <Diagnostics /> : (
         <main>
-          <section class="hero">
+          <section class="hero dashboard-hero">
             <div>
-              <p class="kicker">Every window. Every account.</p>
-              <h2>Know what you can ship<br />before the limit hits.</h2>
+              <p class="kicker">Usage & plan selection</p>
+              <h2>Your next session,<br />with room to ship.</h2>
+              <p class="hero-description">Compare usage, then choose a plan for Claude Code.</p>
             </div>
-            <div class="summary-card">
-              <span class="live-dot" />
-              <div><strong>{state?.accounts.length ?? 0} accounts</strong><small>Live from your machine</small></div>
+            <div class="current-plan" aria-label="Selected Claude Code plan">
+              <span>Claude Code · selected plan</span>
+              <strong>{state ? selectedPlan : 'Loading plans…'}</strong>
+              <small>Changes apply to new sessions. Running sessions keep their current plan.</small>
+              <button class="quiet-button" aria-expanded={setupOpen} aria-controls="plan-setup" onClick={() => setSetupOpen(value => !value)}>
+                {setupOpen ? 'Close setup' : 'Manage plans'}
+              </button>
             </div>
           </section>
+
+          <div id="plan-setup" hidden={!setupOpen}>
+            <PlanSetup state={state} control={control} plans={plans} />
+          </div>
 
           <section class="controls" aria-label="Dashboard filters">
             <div class="segmented">
               {['all', ...(state?.providers.map(item => item.id) ?? [])].map(id => (
-                <button class={providerFilter === id ? 'active' : ''} onClick={() => { setProviderFilter(id); setAccountFilter('all') }}>
+                <button key={id} class={providerFilter === id ? 'active' : ''} aria-pressed={providerFilter === id} onClick={() => { setProviderFilter(id); setAccountFilter('all') }}>
                   {id === 'all' ? 'All providers' : providerLabel[id] ?? id}
                 </button>
               ))}
@@ -195,26 +222,49 @@ function App() {
           </section>
 
           {error && <div class="notice" role="status">{error}</div>}
+          {state && !control && <div class="notice" role="status">Plan controls are unavailable. You can still view quota usage.</div>}
+          {plans.message && <div class="notice success" role="status">{plans.message}</div>}
+          {plans.error && <div class="notice" role="alert">{plans.error}</div>}
 
           <div class="provider-stack">
             {Array.from(groups.entries()).map(([provider, items]) => (
               <section class="provider-group" key={provider}>
                 <div class="section-heading">
                   <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : 'Z'}</span>
-                  <div><p>{providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
+                  <div><p>{provider === 'claude' ? 'Claude Code' : providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
-                <div class="card-grid">
-                  {items.map(item => <AccountCard
-                    key={item.account.id}
-                    state={item}
-                    mode={mode}
-                    now={now}
-                    selected={control == null
-                      ? item.account.active
-                      : item.account.providerId === 'claude'
-                        ? control.mode === 'claude' && control.claude.activeAccountId === item.account.id
-                        : item.account.providerId === 'zai' && control.mode === 'zai'}
-                  />)}
+                <div class="provider-content">
+                  {provider === 'zai' && <div class="provider-plan-action">
+                    <div><strong>GLM Coding Plan for Claude Code</strong><small>{control?.mode === 'zai' ? 'Selected for new sessions' : 'Use your configured Z.ai key for new sessions'}</small></div>
+                    <button class={control?.mode === 'zai' ? 'selected-plan-button' : 'plan-button'}
+                      disabled={!control || control.mode === 'zai' || plans.busy !== ''}
+                      onClick={() => {
+                        if (control?.zai.configured) void plans.selectZAI()
+                        else {
+                          setSetupOpen(true)
+                          requestAnimationFrame(() => plans.apiKeyInput.current?.focus())
+                        }
+                      }}>
+                      {plans.busy === 'zai-activate' ? 'Switching…' : control?.mode === 'zai' ? 'Selected in Claude Code' : control?.zai.configured ? 'Use Z.ai in Claude Code' : 'Set up Z.ai'}
+                    </button>
+                  </div>}
+                  <div class="card-grid">
+                    {items.map(item => <AccountCard
+                      key={item.account.id}
+                      state={item}
+                      mode={mode}
+                      now={now}
+                      selected={item.account.providerId === 'claude'
+                        ? control?.mode === 'claude' && control.claude.activeAccountId === item.account.id
+                        : item.account.providerId === 'codex' && item.account.active}
+                      planAction={item.account.providerId === 'claude' ? {
+                        busy: plans.busy === item.account.id,
+                        disabled: Boolean(item.account.disabled || plans.busy !== '' || !control?.claude.available),
+                        unavailable: !control?.claude.available,
+                        onSelect: () => void plans.selectClaude(item.account.id),
+                      } : undefined}
+                    />)}
+                  </div>
                 </div>
               </section>
             ))}
@@ -223,7 +273,7 @@ function App() {
           {state && state.accounts.length === 0 && (
             <section class="empty-state">
               <span>◇</span><h3>No quota source detected yet</h3>
-              <p>Open diagnostics to see which local tools, homes, and environment references QuotaDeck considered.</p>
+              <p>Use Manage plans to set up Claude or Z.ai, or open diagnostics to inspect available quota sources.</p>
               <button class="refresh-button" onClick={() => setView('diagnostics')}>Open diagnostics</button>
             </section>
           )}
@@ -235,24 +285,22 @@ function App() {
   )
 }
 
-function AccountCard({ state, mode, now, selected }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean }) {
+type PlanAction = { busy: boolean; disabled: boolean; unavailable: boolean; onSelect: () => void }
+
+function AccountCard({ state, mode, now, selected, planAction }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean; planAction?: PlanAction }) {
   const { account, snapshot } = state
-  const windows = [...(snapshot.windows ?? [])].sort((left, right) => {
-    if (!left.resetsAt) return 1
-    if (!right.resetsAt) return -1
-    return new Date(left.resetsAt).getTime() - new Date(right.resetsAt).getTime()
-  })
+  const windows = snapshot.windows ?? []
   const mostConstrained = windows.reduce<QuotaWindow | null>((selected, window) => {
     if (window.usedPercent == null) return selected
     return !selected || (selected.usedPercent ?? -1) < window.usedPercent ? window : selected
   }, null)
   return (
-    <article class={`account-card status-${snapshot.status}`}>
+    <article class={`account-card status-${snapshot.status} ${selected && planAction ? 'selected' : ''}`} aria-label={`${account.label}${account.plan ? ` · ${account.plan}` : ''}`}>
       <div class="account-head">
         <div>
           <div class="badges">
             {account.plan && <span class="plan-badge">{account.plan}</span>}
-            {selected && <span class="active-badge"><i /> selected</span>}
+            {selected && <span class="active-badge"><i /> {planAction ? 'Claude Code · selected' : 'active'}</span>}
             {account.disabled && <span class="disabled-badge">disabled</span>}
           </div>
           <h3>{account.label}</h3>
@@ -267,21 +315,30 @@ function AccountCard({ state, mode, now, selected }: { state: AccountState; mode
         ))}
         {windows.length === 0 && <p class="no-windows">No actionable quota window is available.</p>}
       </div>
+      {planAction && <div class="account-plan-action">
+        <button class={selected ? 'selected-plan-button' : 'plan-button'}
+          disabled={selected || planAction.disabled}
+          aria-label={selected ? `${account.label} is selected in Claude Code` : `Use ${account.label} in Claude Code`}
+          onClick={planAction.onSelect}>
+          {planAction.busy ? 'Switching…' : selected ? 'Selected in Claude Code' : account.disabled ? 'Account disabled' : 'Use in Claude Code'}
+        </button>
+        {planAction.unavailable && !account.disabled && <small>Plan selection unavailable. Check Manage plans.</small>}
+      </div>}
     </article>
   )
 }
 
-function ControlCenter({ state, control, onChanged }: { state: StateResponse | null; control: ControlState | null; onChanged: (next: ControlState) => void }) {
+function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
   const [apiKey, setAPIKey] = useState('')
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const apiKeyInput = useRef<HTMLInputElement>(null)
-  const claudeAccounts = state?.accounts.filter(item => item.account.providerId === 'claude') ?? []
-  const zaiSelected = control?.mode === 'zai'
-  const zaiReady = Boolean(control?.zai.configured || apiKey.trim())
+  const inFlight = useRef(false)
 
-  async function request(path: string, method: string, body: unknown, busyKey: string) {
+  async function request(path: string, method: string, body: unknown, busyKey: string, successMessage = 'Plan selection updated. New Claude Code sessions will use it.') {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(busyKey)
     setMessage('')
     setError('')
@@ -294,11 +351,12 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
       const payload = await response.json().catch(() => null) as { refresh?: string; control?: ControlState; error?: { message?: string } } | null
       if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
       setAPIKey('')
-      if (payload?.control) onChanged(payload.control)
-      setMessage('Plan selection updated. New Claude Code sessions will use it.')
+      if (payload?.control) await onChanged(payload.control)
+      setMessage(successMessage)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'The plan selection could not be updated.')
     } finally {
+      inFlight.current = false
       setBusy('')
     }
   }
@@ -308,6 +366,8 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
   }
 
   async function setupClaude() {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy('cswap-setup')
     setMessage('')
     setError('')
@@ -322,122 +382,77 @@ function ControlCenter({ state, control, onChanged }: { state: StateResponse | n
         error?: { message?: string }
       } | null
       if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
-      if (payload?.control) onChanged(payload.control)
+      if (payload?.control) await onChanged(payload.control)
       const count = payload?.setup?.accountCount ?? 0
       setMessage(`cswap is ready with ${count} Claude account${count === 1 ? '' : 's'}.`)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'cswap setup could not complete.')
     } finally {
+      inFlight.current = false
       setBusy('')
     }
   }
 
   function configureZAI(activate: boolean) {
-    return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save')
+    return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save',
+      activate ? 'Plan selection updated. New Claude Code sessions will use it.' : 'Z.ai API key saved.')
   }
 
   function selectZAI() {
-    if (zaiReady) return configureZAI(true)
-    apiKeyInput.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    apiKeyInput.current?.focus({ preventScroll: true })
+    return request('/api/v1/control/zai', 'PUT', { apiKey: '', activate: true }, 'zai-activate')
   }
 
+  return { apiKey, setAPIKey, apiKeyInput, busy, message, error, selectClaude, setupClaude, configureZAI, selectZAI }
+}
+
+function PlanSetup({ state, control, plans }: { state: StateResponse | null; control: ControlState | null; plans: ReturnType<typeof usePlanControl> }) {
+  const { apiKey, setAPIKey, apiKeyInput, busy, setupClaude, configureZAI } = plans
+  const claudeAccounts = state?.accounts.filter(item => item.account.providerId === 'claude') ?? []
+
   return (
-    <main class="plan-control">
-      <section class="hero compact control-hero">
-        <div>
-          <p class="kicker">Claude Code routing</p>
-          <h2>Pick the plan for<br />your next session.</h2>
+    <section class="plan-layout" aria-label="Plan setup">
+      <section class="plan-panel">
+        <div class="plan-heading">
+          <div><span class="provider-glyph claude">C</span><div><p>Claude subscriptions</p><small>Accounts managed by cswap</small></div></div>
+          <span class={`availability ${control?.claude.available ? 'ok' : ''}`}>{!control ? 'unavailable' : control.claude.available ? 'cswap ready' : 'setup needed'}</span>
         </div>
-        <div class="current-plan">
-          <span>Selected now</span>
-          <strong>{control?.mode === 'zai' ? 'Z.ai · GLM Coding Plan' : control?.mode === 'claude' ? 'Claude subscription' : 'No plan detected'}</strong>
-          <small>Already-running Claude Code sessions keep their current environment.</small>
+        {control && (!control.claude.available || claudeAccounts.length === 0) ? <div class="plan-option setup-option">
+          <div>
+            <strong>{control.claude.available ? 'Add your current Claude login' : 'Install and configure cswap'}</strong>
+            <small>Sign in to Claude Code first. Setup imports your current login so you can view its usage and select it here.</small>
+          </div>
+          <button class="plan-button" disabled={busy !== ''} onClick={() => void setupClaude()}>
+            {busy === 'cswap-setup' ? 'Setting up…' : control.claude.available ? 'Set up cswap' : 'Install & set up'}
+          </button>
+        </div> : <p class="control-empty">{control ? 'Your accounts are ready. Choose Use in Claude Code on a quota card below.' : 'Plan controls are temporarily unavailable.'}</p>}
+      </section>
+      <section class="plan-panel zai-panel">
+        <div class="plan-heading">
+          <div><span class="provider-glyph zai">Z</span><div><p>Z.ai</p><small>GLM Coding Plan for Claude Code</small></div></div>
+          <span class={`availability ${control?.zai.configured ? 'ok' : ''}`}>{!control ? 'unavailable' : control.zai.configured ? 'key stored' : 'setup needed'}</span>
+        </div>
+        <div class="zai-form">
+          <label for="zai-api-key">Z.ai API key</label>
+          <input
+            id="zai-api-key"
+            ref={apiKeyInput}
+            type="password"
+            value={apiKey}
+            autoComplete="new-password"
+            placeholder={control?.zai.configured ? 'Key already stored — leave blank to keep it' : 'Paste your Z.ai API key'}
+            onInput={event => setAPIKey(event.currentTarget.value)}
+          />
+          <p>The key stays in private local files and is never returned to this page. QuotaDeck configures the official Anthropic endpoint <code>{control?.zai.endpoint ?? 'https://api.z.ai/api/anthropic'}</code>.</p>
+          <div class="zai-actions">
+            <button class="quiet-button" disabled={!control || busy !== '' || apiKey.trim() === ''} onClick={() => void configureZAI(false)}>{busy === 'zai-save' ? 'Saving…' : 'Save key'}</button>
+            <button class="refresh-button" disabled={!control || busy !== '' || (!control?.zai.configured && apiKey.trim() === '') || (control?.mode === 'zai' && apiKey.trim() === '')} onClick={() => void configureZAI(true)}>
+              {busy === 'zai-activate' ? 'Configuring…' : control?.mode === 'zai' ? (apiKey.trim() === '' ? 'Selected' : 'Update active key') : 'Save & use Z.ai'}
+            </button>
+          </div>
+          <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" rel="noreferrer">Open Z.ai API key management ↗</a>
         </div>
       </section>
-
-      {message && <div class="notice success" role="status">{message}</div>}
-      {error && <div class="notice" role="alert">{error}</div>}
-
-      <div class="plan-layout">
-        <section class="plan-panel">
-          <div class="plan-heading">
-            <div><span class="provider-glyph claude">C</span><div><p>Claude Code plans</p><small>Claude subscriptions and compatible providers</small></div></div>
-            <span class={`availability ${control?.claude.available || control?.zai.configured ? 'ok' : ''}`}>{control?.claude.available ? 'cswap ready' : control?.zai.configured ? 'Z.ai ready' : 'setup needed'}</span>
-          </div>
-          <div class="plan-options">
-            {(!control?.claude.available || claudeAccounts.length === 0) && <div class="plan-option setup-option">
-              <div>
-                <span>Automatic setup</span>
-                <strong>{control?.claude.available ? 'Add your current Claude login' : 'Install and configure cswap'}</strong>
-                <small>QuotaDeck uses uv or pipx, then lets cswap import the current Claude Code login without exposing credentials.</small>
-              </div>
-              <button
-                class="plan-button"
-                disabled={busy !== ''}
-                onClick={() => void setupClaude()}
-              >{busy === 'cswap-setup' ? 'Setting up…' : control?.claude.available ? 'Set up cswap' : 'Install & set up'}</button>
-            </div>}
-            {claudeAccounts.map(item => {
-              const selected = control?.mode === 'claude' && control.claude.activeAccountId === item.account.id
-              return <div class={`plan-option ${selected ? 'selected' : ''}`} key={item.account.id}>
-                <div>
-                  <span>{item.account.plan || 'Claude plan'}</span>
-                  <strong>{item.account.label}</strong>
-                  <small>cswap slot {item.account.sourceMeta?.slot ?? '—'}{item.account.disabled ? ' · disabled' : ''}</small>
-                </div>
-                <button
-                  class={selected ? 'selected-plan-button' : 'plan-button'}
-                  disabled={selected || item.account.disabled || busy !== '' || !control?.claude.available}
-                  onClick={() => void selectClaude(item.account.id)}
-                >{selected ? 'Selected' : busy === item.account.id ? 'Switching…' : 'Use plan'}</button>
-              </div>
-            })}
-            <div class={`plan-option ${zaiSelected ? 'selected' : ''}`}>
-              <div>
-                <span>GLM Coding Plan</span>
-                <strong>Z.ai</strong>
-                <small>{control?.zai.configured ? 'API key stored · Anthropic-compatible' : 'Add an API key to enable'}</small>
-              </div>
-              <button
-                class={zaiSelected ? 'selected-plan-button' : 'plan-button'}
-                disabled={zaiSelected || busy !== ''}
-                onClick={() => void selectZAI()}
-              >{zaiSelected ? 'Selected' : busy === 'zai-activate' ? 'Switching…' : zaiReady ? 'Use plan' : 'Set up'}</button>
-            </div>
-            {claudeAccounts.length === 0 && <p class="control-empty">Sign in to Claude Code first if automatic setup asks for a login.</p>}
-          </div>
-        </section>
-
-        <section class={`plan-panel zai-panel ${control?.mode === 'zai' ? 'selected' : ''}`}>
-          <div class="plan-heading">
-            <div><span class="provider-glyph zai">Z</span><div><p>Z.ai</p><small>GLM Coding Plan for Claude Code</small></div></div>
-            <span class={`availability ${control?.zai.configured ? 'ok' : ''}`}>{control?.zai.configured ? 'key stored' : 'setup needed'}</span>
-          </div>
-          <div class="zai-form">
-            <label for="zai-api-key">Z.ai API key</label>
-            <input
-              id="zai-api-key"
-              ref={apiKeyInput}
-              type="password"
-              value={apiKey}
-              autoComplete="new-password"
-              placeholder={control?.zai.configured ? 'Key already stored — leave blank to keep it' : 'Paste your Z.ai API key'}
-              onInput={event => setAPIKey(event.currentTarget.value)}
-            />
-            <p>The key stays in private local files and is never returned to this page. QuotaDeck configures the official Anthropic endpoint <code>{control?.zai.endpoint ?? 'https://api.z.ai/api/anthropic'}</code>.</p>
-            <div class="zai-actions">
-              <button class="quiet-button" disabled={busy !== '' || apiKey.trim() === ''} onClick={() => void configureZAI(false)}>{busy === 'zai-save' ? 'Saving…' : 'Save key'}</button>
-              <button class="refresh-button" disabled={busy !== '' || (!control?.zai.configured && apiKey.trim() === '') || (control?.mode === 'zai' && apiKey.trim() === '')} onClick={() => void configureZAI(true)}>
-                {busy === 'zai-activate' ? 'Configuring…' : control?.mode === 'zai' ? (apiKey.trim() === '' ? 'Selected' : 'Update active key') : 'Save & use Z.ai'}
-              </button>
-            </div>
-            <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" rel="noreferrer">Open Z.ai API key management ↗</a>
-          </div>
-        </section>
-      </div>
-      <p class="control-note">Switching affects new Claude Code processes. QuotaDeck preserves unrelated Claude settings and never opens the cswap credential store.</p>
-    </main>
+    </section>
   )
 }
 
@@ -445,16 +460,19 @@ function WindowRow({ window, mode, now, constrained }: { window: QuotaWindow; mo
   const rawUsed = window.usedPercent ?? percentageFromValues(window)
   const used = rawUsed == null ? null : clamp(rawUsed)
   const percentage = used == null ? null : mode === 'used' ? used : 100 - used
-  const reset = window.resetsAt ? relativeTime(window.resetsAt, now) : 'No reset supplied'
+  const reset = window.resetsAt
+    ? new Date(window.resetsAt).getTime() <= now ? 'Reset time passed · awaiting refresh' : relativeTime(window.resetsAt, now)
+    : 'No reset supplied'
   const title = window.resetsAt ? new Date(window.resetsAt).toLocaleString() : undefined
+  const context = windowContext(window)
   return (
     <div class={constrained ? 'window-row constrained' : 'window-row'}>
       <div class="window-title">
-        <div><strong>{window.label}</strong>{window.scope && <span>{window.scope}</span>}</div>
+        <div><strong>{window.label}</strong>{context && <span class="window-context">{context}</span>}</div>
         {constrained && <em>tightest</em>}
       </div>
       <div class="meter-line">
-        <div class="meter" role="progressbar" aria-valuenow={percentage == null ? undefined : Math.round(percentage)} aria-valuemin={0} aria-valuemax={100}>
+        <div class="meter" role="progressbar" aria-label={`${window.label} ${mode}`} aria-valuetext={percentage == null ? 'Unknown' : `${Math.round(percentage)}% ${mode}`} aria-valuenow={percentage == null ? undefined : Math.round(percentage)} aria-valuemin={0} aria-valuemax={100}>
           <span style={{ width: `${percentage ?? 0}%` }} />
         </div>
         <strong>{percentage == null ? '—' : `${Math.round(percentage)}%`}</strong>
@@ -515,6 +533,13 @@ function percentageFromValues(window: QuotaWindow): number | null {
   if (window.used != null && window.limit) return window.used / window.limit * 100
   if (window.remaining != null && window.limit) return 100 - window.remaining / window.limit * 100
   return null
+}
+
+function windowContext(window: QuotaWindow): string {
+  const scope = window.scope?.trim()
+  if (scope && scope.toLowerCase() !== 'all' && !window.label.toLowerCase().includes(scope.toLowerCase())) return scope
+  if (window.kind && !['quota', 'rate-limit'].includes(window.kind)) return window.kind
+  return ''
 }
 
 function clamp(value: number): number { return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0)) }
