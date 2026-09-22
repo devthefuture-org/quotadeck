@@ -181,12 +181,23 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 		_ = stdout.Close()
 		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("start Codex app-server")}
 	}
-	defer func() {
-		cancel()
-		_ = stdin.Close()
-		_ = stdout.Close()
-		_ = command.Wait()
-	}()
+	// exec copies the child's stderr from a goroutine of its own, and only Wait
+	// guarantees that copy is complete. Reading the buffer before then races the
+	// copier and yields whatever happened to have arrived.
+	var reaped sync.Once
+	reap := func() {
+		reaped.Do(func() {
+			cancel()
+			_ = stdin.Close()
+			_ = stdout.Close()
+			_ = command.Wait()
+		})
+	}
+	defer reap()
+	stderrTail := func() string {
+		reap()
+		return stderr.lastLine()
+	}
 	// Stdio reads/writes do not observe context cancellation themselves.
 	// Close them explicitly even if a descendant escaped the process group.
 	stopClosing := context.AfterFunc(childContext, func() {
@@ -199,12 +210,12 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 		"id": 1, "method": "initialize",
 		"params": map[string]any{"clientInfo": map[string]string{"name": "quotadeck", "title": "QuotaDeck", "version": "0.1.0"}},
 	}); err != nil {
-		return nil, nil, rpcFailure(home, stderr, errors.New("write Codex initialize request"))
+		return nil, nil, rpcFailure(home, stderrTail, errors.New("write Codex initialize request"))
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	if _, err := responseByID(scanner, 1); err != nil {
-		return nil, nil, rpcFailure(home, stderr, err)
+		return nil, nil, rpcFailure(home, stderrTail, err)
 	}
 	for _, message := range []map[string]any{
 		{"method": "initialized"},
@@ -212,14 +223,14 @@ func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error)
 		{"id": 3, "method": "account/rateLimits/read", "params": nil},
 	} {
 		if err := encoder.Encode(message); err != nil {
-			return nil, nil, rpcFailure(home, stderr, errors.New("write Codex request"))
+			return nil, nil, rpcFailure(home, stderrTail, errors.New("write Codex request"))
 		}
 	}
 	accountResult, limitsResult := []byte(nil), []byte(nil)
 	for accountResult == nil || limitsResult == nil {
 		response, err := nextResponse(scanner)
 		if err != nil {
-			return nil, nil, rpcFailure(home, stderr, err)
+			return nil, nil, rpcFailure(home, stderrTail, err)
 		}
 		switch response.ID {
 		case 2:
@@ -292,7 +303,7 @@ func (e *rpcError) Error() string {
 // upgrades the error code when that wording names an expired session, so the UI
 // can name the fix. The propagated message is the guarantee; the match below is
 // a convenience, and an unrecognised wording still reaches the user intact.
-func rpcFailure(home string, stderr *syncBuffer, err error) error {
+func rpcFailure(home string, stderrTail func() string, err error) error {
 	var rpc *rpcError
 	if errors.As(err, &rpc) {
 		if mentionsExpiredAuth(rpc.Message) {
@@ -301,8 +312,8 @@ func rpcFailure(home string, stderr *syncBuffer, err error) error {
 		return &domain.CodedError{Code: "codex_rpc_failed", Err: err}
 	}
 	// A startup crash or a dead pipe says nothing on stdout; the cause is on
-	// stderr, which exec fills from a goroutine of its own.
-	tail := stderr.lastLine()
+	// stderr. Reaping the child first is what makes that read a fact.
+	tail := stderrTail()
 	if tail == "" {
 		return &domain.CodedError{Code: "codex_rpc_failed", Err: err}
 	}

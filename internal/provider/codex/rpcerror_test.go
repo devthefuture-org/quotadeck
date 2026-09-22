@@ -22,7 +22,7 @@ const expiredSessionMessage = `failed to fetch codex rate limits: GET https://ch
 }`
 
 func TestRPCFailureClassifiesExpiredSession(t *testing.T) {
-	err := rpcFailure("/home/user/.codex", &syncBuffer{}, &rpcError{Code: -32603, Message: expiredSessionMessage})
+	err := rpcFailure("/home/user/.codex", func() string { return "" }, &rpcError{Code: -32603, Message: expiredSessionMessage})
 
 	if code := domain.ErrorCode(err); code != "codex_auth_required" {
 		t.Fatalf("expected codex_auth_required, got %q (%v)", code, err)
@@ -37,7 +37,7 @@ func TestRPCFailureClassifiesExpiredSession(t *testing.T) {
 }
 
 func TestRPCFailureKeepsUnknownUpstreamWording(t *testing.T) {
-	err := rpcFailure("/home/user/.codex", &syncBuffer{}, &rpcError{Code: -32603, Message: "backend is on fire"})
+	err := rpcFailure("/home/user/.codex", func() string { return "" }, &rpcError{Code: -32603, Message: "backend is on fire"})
 
 	if code := domain.ErrorCode(err); code != "codex_rpc_failed" {
 		t.Fatalf("expected codex_rpc_failed, got %q", code)
@@ -54,7 +54,7 @@ func TestRPCFailureFallsBackToStderrWhenStdoutSaysNothing(t *testing.T) {
 	stderr := &syncBuffer{}
 	stderr.Write([]byte("\x1b[2m2026-09-22T07:05:55Z\x1b[0m \x1b[31mERROR\x1b[0m codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: \"Invalid refresh token.\"\n"))
 
-	err := rpcFailure("/home/user/.codex", stderr, errors.New("Codex app-server closed before responding"))
+	err := rpcFailure("/home/user/.codex", stderr.lastLine, errors.New("Codex app-server closed before responding"))
 
 	if code := domain.ErrorCode(err); code != "codex_auth_required" {
 		t.Fatalf("expected the stderr tail to classify the failure, got %q (%v)", code, err)
@@ -71,7 +71,7 @@ func TestRPCFailureKeepsCrashCauseFromStderr(t *testing.T) {
 	stderr := &syncBuffer{}
 	stderr.Write([]byte("thread 'main' panicked at src/main.rs:12\n"))
 
-	err := rpcFailure("/home/user/.codex", stderr, errors.New("Codex app-server closed before responding"))
+	err := rpcFailure("/home/user/.codex", stderr.lastLine, errors.New("Codex app-server closed before responding"))
 
 	if code := domain.ErrorCode(err); code != "codex_rpc_failed" {
 		t.Fatalf("expected codex_rpc_failed, got %q", code)
