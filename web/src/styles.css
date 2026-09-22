@@ -157,6 +157,18 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .account-plan-action { display: grid; gap: 8px; margin-top: auto; padding-top: 18px; }
 .account-plan-action small { color: var(--muted); font-size: 11px; }
 .account-plan-action button { min-height: 40px; font-size: 12px; }
+
+.account-signin { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.account-signin small { color: var(--muted); font-size: 11px; }
+.account-signin button, .account-signin a { min-height: 38px; font-size: 12px; }
+.account-signin a { display: grid; place-items: center; text-decoration: none; }
+.account-signin .device-code {
+  margin: 0; padding: 10px; border: 1px dashed var(--line); border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 20px; letter-spacing: 3px; text-align: center; user-select: all;
+}
+.account-signin .signin-error { color: var(--red); }
+.account-signin .signin-ok { color: var(--acid-soft); }
 .account-head { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .account-head h3 { margin: 8px 0 2px; font-size: 22px; letter-spacing: -.035em; overflow-wrap: anywhere; }
 .badges { min-height: 21px; display: flex; flex-wrap: wrap; gap: 6px; }

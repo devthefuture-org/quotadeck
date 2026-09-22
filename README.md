@@ -26,6 +26,8 @@
 
 QuotaDeck models `provider → accounts → windows[]`, so new provider-defined windows flow through storage, API, and UI without a `session`/`weekly` hard-code. The daemon binds to loopback, embeds its Preact frontend in one Go binary, stores history in SQLite WAL, streams updates with Server-Sent Events, and sends no telemetry.
 
+A Codex account whose session has expired offers **Reconnect** on its own card, through the browser or a device code, without dropping to a terminal.
+
 Choose **System**, **Light**, or **Dark** in the dashboard header. The theme preference is saved locally; **System** follows changes to your device's appearance automatically.
 
 The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan can be activated alongside its quotas. **Manage plans** opens setup for both providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.

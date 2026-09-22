@@ -197,6 +197,9 @@ func (c *conn) close() {
 
 func (c *conn) read() {
 	defer close(c.done)
+	// This is the only sender, so closing here releases any consumer ranging
+	// over the notifications instead of stranding it on a dead connection.
+	defer close(c.notifs)
 	scanner := bufio.NewScanner(c.stdout)
 	scanner.Buffer(make([]byte, 64*1024), 4<<20)
 	for scanner.Scan() {

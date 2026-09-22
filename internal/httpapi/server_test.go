@@ -15,6 +15,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/poller"
+	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
 	"github.com/devthefuture-org/quotadeck/internal/store"
 )
 
@@ -209,5 +210,221 @@ func TestClaudeSetupRequiresGuardAndReturnsRedactedResult(t *testing.T) {
 	}
 	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"accountCount":1`)) {
 		t.Fatalf("setup result missing: %s", recorder.Body.String())
+	}
+}
+
+// fakeCodexProvider reports one configured account, so the handler can resolve
+// an id to a CODEX_HOME the way the real provider does.
+type fakeCodexProvider struct{}
+
+func (fakeCodexProvider) ID() string   { return "codex" }
+func (fakeCodexProvider) Name() string { return "Codex" }
+func (fakeCodexProvider) Discover(context.Context) ([]domain.AccountCandidate, error) {
+	return []domain.AccountCandidate{{
+		ID: "codex:home:known", ProviderID: "codex", Label: "Codex",
+		Source: "CODEX_HOME", Ref: "/home/user/.codex",
+	}}, nil
+}
+func (fakeCodexProvider) Fetch(context.Context, domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	return domain.Account{}, domain.Snapshot{}, nil
+}
+
+type fakeLogins struct {
+	startedHome string
+	startedMode codex.LoginMode
+	canceled    string
+	err         error
+}
+
+func (f *fakeLogins) Start(_ context.Context, accountID, home string, mode codex.LoginMode) (codex.LoginSnapshot, error) {
+	if f.err != nil {
+		return codex.LoginSnapshot{}, f.err
+	}
+	f.startedHome, f.startedMode = home, mode
+	return codex.LoginSnapshot{ID: "login-1", AccountID: accountID, Mode: mode, State: codex.LoginPending}, nil
+}
+
+func (f *fakeLogins) Cancel(loginID string) error {
+	f.canceled = loginID
+	return nil
+}
+
+func (f *fakeLogins) Current(string) (codex.LoginSnapshot, bool) {
+	return codex.LoginSnapshot{ID: "login-1", State: codex.LoginPending}, true
+}
+
+func codexLoginServer(t *testing.T, logins CodexLogins) *Server {
+	t.Helper()
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	engine := poller.New(database, []domain.Provider{fakeCodexProvider{}}, time.Minute, time.Second, 30)
+	return New(engine, doctor.Collector{Config: config.Default(), Version: "test"}, &fakeController{}).
+		WithCodexLogins(logins)
+}
+
+func codexLoginRequest(method, target string, body any) *http.Request {
+	var payload []byte
+	if body != nil {
+		payload, _ = json.Marshal(body)
+	}
+	request := httptest.NewRequest(method, target, bytes.NewReader(payload))
+	request.RemoteAddr = "127.0.0.1:12345"
+	request.Header.Set("X-QuotaDeck-Request", "control")
+	return request
+}
+
+func TestCodexLoginRefusesWithoutLoopbackOrGuard(t *testing.T) {
+	server := codexLoginServer(t, &fakeLogins{})
+	body := map[string]string{"accountId": "codex:home:known", "mode": "browser"}
+
+	remote := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", body)
+	remote.RemoteAddr = "203.0.113.7:9999"
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, remote)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("a non-loopback sign-in returned %d", recorder.Code)
+	}
+
+	unguarded := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", body)
+	unguarded.Header.Del("X-QuotaDeck-Request")
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, unguarded)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("a sign-in without the control header returned %d", recorder.Code)
+	}
+}
+
+// The CODEX_HOME must come from the resolved account, never from the caller:
+// otherwise the endpoint runs Codex against any path it is handed.
+func TestCodexLoginTakesTheHomeFromTheResolvedAccount(t *testing.T) {
+	logins := &fakeLogins{}
+	server := codexLoginServer(t, logins)
+
+	request := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", map[string]string{
+		"accountId": "codex:home:known", "mode": "deviceCode",
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("sign-in returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if logins.startedHome != "/home/user/.codex" {
+		t.Fatalf("expected the discovered home, got %q", logins.startedHome)
+	}
+	if logins.startedMode != codex.LoginDeviceCode {
+		t.Fatalf("expected the requested mode, got %q", logins.startedMode)
+	}
+}
+
+func TestCodexLoginRejectsAnAccountThatIsNotConfigured(t *testing.T) {
+	server := codexLoginServer(t, &fakeLogins{})
+
+	request := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", map[string]string{
+		"accountId": "codex:home:retired", "mode": "browser",
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an unconfigured account returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCodexLoginRejectsAnUnknownMode(t *testing.T) {
+	server := codexLoginServer(t, &fakeLogins{})
+
+	request := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", map[string]string{
+		"accountId": "codex:home:known", "mode": "telepathy",
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown mode returned %d", recorder.Code)
+	}
+}
+
+// A second browser sign-in is refused with a code the UI can act on, because
+// the alternative — the device code — is the remedy.
+func TestCodexLoginReportsABusyBrowserSlot(t *testing.T) {
+	server := codexLoginServer(t, &fakeLogins{err: codex.ErrLoginBrowserBusy})
+
+	request := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", map[string]string{
+		"accountId": "codex:home:known", "mode": "browser",
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("a busy browser slot returned %d", recorder.Code)
+	}
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(recorder.Body.Bytes(), &payload)
+	if payload.Error.Code != "browser_login_busy" {
+		t.Fatalf("unexpected error code %q", payload.Error.Code)
+	}
+}
+
+// The status endpoint is keyed by account: a reloaded page has forgotten the
+// sign-in id, and the event stream drops events under load.
+func TestCodexLoginStatusIsKeyedByAccount(t *testing.T) {
+	server := codexLoginServer(t, &fakeLogins{})
+
+	request := codexLoginRequest(http.MethodGet,
+		"/api/v1/control/codex/login?accountId=codex:home:known", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var snapshot codex.LoginSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ID != "login-1" || snapshot.State != codex.LoginPending {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}
+
+func TestCodexLoginCancelPassesTheID(t *testing.T) {
+	logins := &fakeLogins{}
+	server := codexLoginServer(t, logins)
+
+	request := codexLoginRequest(http.MethodDelete, "/api/v1/control/codex/login/login-1", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || logins.canceled != "login-1" {
+		t.Fatalf("cancel returned %d, canceled %q", recorder.Code, logins.canceled)
+	}
+}
+
+// Without a manager wired the endpoints must refuse rather than panic.
+func TestCodexLoginUnavailableWithoutAManager(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	engine := poller.New(database, []domain.Provider{fakeCodexProvider{}}, time.Minute, time.Second, 30)
+	server := New(engine, doctor.Collector{Config: config.Default(), Version: "test"})
+
+	request := codexLoginRequest(http.MethodPost, "/api/v1/control/codex/login", map[string]string{
+		"accountId": "codex:home:known",
+	})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 without a login manager, got %d", recorder.Code)
 	}
 }

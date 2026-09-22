@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/control"
@@ -24,6 +25,7 @@ import (
 type Runtime struct {
 	database *store.Store
 	engine   *poller.Engine
+	logins   *codex.LoginManager
 	handler  http.Handler
 
 	startOnce sync.Once
@@ -39,7 +41,8 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 	}
 	interval, _ := cfg.PollInterval()
 	timeout, _ := cfg.PollTimeout()
-	engine := poller.New(database, buildProviders(cfg), interval, timeout, cfg.Storage.RetentionDays)
+	providers, codexProvider := buildProviders(cfg)
+	engine := poller.New(database, providers, interval, timeout, cfg.Storage.RetentionDays)
 	collector := doctor.Collector{Config: cfg, ConfigPath: configPath, Version: version}
 	controller := control.New(
 		cfg.Providers.Claude.Binary,
@@ -47,7 +50,24 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
 	)
 	api := httpapi.New(engine, collector, controller)
-	return &Runtime{database: database, engine: engine, handler: api.Handler()}, nil
+	runtime := &Runtime{database: database, engine: engine}
+	if codexProvider != nil {
+		// The manager takes the provider itself, so a sign-in can never run a
+		// different Codex binary than the one Fetch polls with, and both share
+		// the per-home exclusion that protects auth.json.
+		runtime.logins = codex.NewLoginManager(codexProvider,
+			func(snapshot codex.LoginSnapshot) {
+				engine.Hub().Publish(map[string]any{
+					"type": "codex-login", "accountId": snapshot.AccountID,
+					"loginId": snapshot.ID, "state": snapshot.State, "at": time.Now().UTC(),
+				})
+			},
+			func() { engine.RefreshProviderAfterChange("codex") },
+		)
+		api = api.WithCodexLogins(runtime.logins)
+	}
+	runtime.handler = api.Handler()
+	return runtime, nil
 }
 
 func (r *Runtime) Start(parent context.Context) {
@@ -65,12 +85,20 @@ func (r *Runtime) Close() error {
 		if r.cancel != nil {
 			r.cancel()
 		}
+		// Sign-in sessions outlive the request that started them and write
+		// through the engine when they end. Wait for them before the store goes
+		// away, or a completion lands on a closed database.
+		if r.logins != nil {
+			r.logins.Close()
+		}
 		r.closeErr = r.database.Close()
 	})
 	return r.closeErr
 }
 
-func buildProviders(cfg config.Config) []domain.Provider {
+// buildProviders also hands back the Codex provider, which the login manager
+// needs by identity rather than by configuration.
+func buildProviders(cfg config.Config) ([]domain.Provider, *codex.Provider) {
 	providers := make([]domain.Provider, 0, 3)
 	if cfg.Providers.Claude.Enabled {
 		providers = append(providers, claudecswap.New(cfg.Providers.Claude.Binary, runner.ExecRunner{}))
@@ -78,8 +106,10 @@ func buildProviders(cfg config.Config) []domain.Provider {
 	if cfg.Providers.ZAI.Enabled {
 		providers = append(providers, zai.New(cfg.Providers.ZAI))
 	}
+	var codexProvider *codex.Provider
 	if cfg.Providers.Codex.Enabled {
-		providers = append(providers, codex.New(cfg.Providers.Codex.Binary, cfg.Providers.Codex.Accounts))
+		codexProvider = codex.New(cfg.Providers.Codex.Binary, cfg.Providers.Codex.Accounts)
+		providers = append(providers, codexProvider)
 	}
-	return providers
+	return providers, codexProvider
 }

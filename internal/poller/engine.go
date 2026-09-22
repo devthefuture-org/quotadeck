@@ -29,6 +29,7 @@ type Engine struct {
 
 	mu       sync.Mutex
 	provider map[string]*sync.Mutex
+	queued   map[string]bool
 }
 
 func New(database *store.Store, providers []domain.Provider, interval, timeout time.Duration, retentionDays int) *Engine {
@@ -39,7 +40,7 @@ func New(database *store.Store, providers []domain.Provider, interval, timeout t
 	return &Engine{
 		store: database, providers: providers, interval: interval, timeout: timeout,
 		retention: time.Duration(retentionDays) * 24 * time.Hour,
-		hub:       NewHub(), provider: locks,
+		hub:       NewHub(), provider: locks, queued: make(map[string]bool),
 	}
 }
 
@@ -128,12 +129,73 @@ func (e *Engine) History(ctx context.Context, accountID string, from, to time.Ti
 
 func (e *Engine) Refreshing() bool { return e.refreshing.Load() }
 
+// DiscoverAccount resolves an account id against what the provider reports
+// right now. The store is not an authority here: it keeps accounts that have
+// since been removed from the configuration, so resolving a target against it
+// would let a caller act on a home the user no longer configures.
+func (e *Engine) DiscoverAccount(ctx context.Context, providerID, accountID string) (domain.AccountCandidate, error) {
+	for _, provider := range e.providers {
+		if provider.ID() != providerID {
+			continue
+		}
+		candidates, err := provider.Discover(ctx)
+		if err != nil {
+			return domain.AccountCandidate{}, err
+		}
+		for _, candidate := range candidates {
+			if candidate.ID == accountID {
+				return candidate, nil
+			}
+		}
+		return domain.AccountCandidate{}, fmt.Errorf("account %q is not configured", accountID)
+	}
+	return domain.AccountCandidate{}, fmt.Errorf("provider %q is not enabled", providerID)
+}
+
+// RefreshProviderAfterChange guarantees a refresh actually happens, unlike
+// RefreshProvider, which yields when the regular poll holds the lock. A caller
+// that just changed a provider's credentials needs the reread to occur; several
+// such calls collapse into one.
+func (e *Engine) RefreshProviderAfterChange(providerID string) {
+	var target domain.Provider
+	for _, provider := range e.providers {
+		if provider.ID() == providerID {
+			target = provider
+		}
+	}
+	if target == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.queued[providerID] {
+		e.mu.Unlock()
+		return
+	}
+	e.queued[providerID] = true
+	e.mu.Unlock()
+	go func() {
+		lock := e.providerLock(providerID)
+		lock.Lock()
+		defer lock.Unlock()
+		e.mu.Lock()
+		e.queued[providerID] = false
+		e.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+		defer cancel()
+		_ = e.runProviderRefresh(ctx, target)
+	}()
+}
+
 func (e *Engine) refreshProvider(parent context.Context, provider domain.Provider) error {
 	lock := e.providerLock(provider.ID())
 	if !lock.TryLock() {
 		return nil
 	}
 	defer lock.Unlock()
+	return e.runProviderRefresh(parent, provider)
+}
+
+func (e *Engine) runProviderRefresh(parent context.Context, provider domain.Provider) error {
 	ctx, cancel := context.WithTimeout(parent, e.timeout)
 	defer cancel()
 	candidates, err := provider.Discover(ctx)
@@ -169,6 +231,11 @@ func (e *Engine) refreshProvider(parent context.Context, provider domain.Provide
 
 func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, candidate domain.AccountCandidate) error {
 	account, snapshot, fetchErr := provider.Fetch(ctx, candidate)
+	// A skipped account keeps exactly the state it had. Recording a failure
+	// here would replace a still-valid snapshot with one the user never hit.
+	if errors.Is(fetchErr, domain.ErrSkipAccount) {
+		return nil
+	}
 	// Give storage its own full budget after the network/CLI call, including
 	// when that call used its entire deadline and we need to persist an error.
 	persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

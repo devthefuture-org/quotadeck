@@ -85,6 +85,13 @@ type Provider interface {
 	Fetch(ctx context.Context, account AccountCandidate) (Account, Snapshot, error)
 }
 
+// ErrSkipAccount tells the poller to leave an account's stored state exactly as
+// it is. A provider returns it when reading would be wrong rather than
+// impossible — a Codex sign-in holding its CODEX_HOME, for instance. Recording
+// an error there would replace a still-valid snapshot with a failure the user
+// did not experience.
+var ErrSkipAccount = errors.New("account skipped for this cycle")
+
 type CodedError struct {
 	Code string
 	Err  error

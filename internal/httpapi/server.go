@@ -18,17 +18,19 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/poller"
+	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
 )
 
 //go:embed ui
 var uiFiles embed.FS
 
 type Server struct {
-	engine     *poller.Engine
-	doctor     doctor.Collector
-	controller Controller
-	startedAt  time.Time
-	handler    http.Handler
+	engine      *poller.Engine
+	doctor      doctor.Collector
+	controller  Controller
+	codexLogins CodexLogins
+	startedAt   time.Time
+	handler     http.Handler
 }
 
 type Controller interface {
@@ -36,6 +38,14 @@ type Controller interface {
 	SetupClaude(ctx context.Context) (control.ClaudeSetupResult, error)
 	SwitchClaude(ctx context.Context, accountID string) error
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
+}
+
+// CodexLogins runs Codex sign-in sessions. They outlive the request that starts
+// them, so the implementation is owned by the runtime, not by this server.
+type CodexLogins interface {
+	Start(ctx context.Context, accountID, home string, mode codex.LoginMode) (codex.LoginSnapshot, error)
+	Cancel(loginID string) error
+	Current(home string) (codex.LoginSnapshot, bool)
 }
 
 func New(engine *poller.Engine, collector doctor.Collector, controllers ...Controller) *Server {
@@ -46,6 +56,14 @@ func New(engine *poller.Engine, collector doctor.Collector, controllers ...Contr
 	server := &Server{engine: engine, doctor: collector, controller: controller, startedAt: time.Now().UTC()}
 	server.handler = server.routes()
 	return server
+}
+
+// WithCodexLogins enables the Codex sign-in endpoints. Handlers refuse them
+// when no manager is wired, the same way they refuse the other controls.
+func (s *Server) WithCodexLogins(logins CodexLogins) *Server {
+	s.codexLogins = logins
+	s.handler = s.routes()
+	return s
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }
@@ -64,6 +82,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/control/claude/setup", s.setupClaude)
 	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
 	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
+	mux.HandleFunc("POST /api/v1/control/codex/login", s.startCodexLogin)
+	mux.HandleFunc("GET /api/v1/control/codex/login", s.codexLoginStatus)
+	mux.HandleFunc("DELETE /api/v1/control/codex/login/{loginId}", s.cancelCodexLogin)
 	mux.Handle("/", spaHandler())
 	return securityHeaders(mux)
 }
@@ -424,4 +445,113 @@ func writeError(writer http.ResponseWriter, status int, code, message string) {
 
 func Shutdown(ctx context.Context, server *http.Server) error {
 	return server.Shutdown(ctx)
+}
+
+func (s *Server) startCodexLogin(writer http.ResponseWriter, request *http.Request) {
+	if !s.codexLoginAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		AccountID string `json:"accountId"`
+		Mode      string `json:"mode"`
+	}
+	if err := decodeJSON(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain an accountId and a mode")
+		return
+	}
+	mode := codex.LoginBrowser
+	switch input.Mode {
+	case "", string(codex.LoginBrowser):
+	case string(codex.LoginDeviceCode):
+		mode = codex.LoginDeviceCode
+	default:
+		writeError(writer, http.StatusBadRequest, "invalid_mode", "mode must be browser or deviceCode")
+		return
+	}
+	candidate, ok := s.resolveCodexAccount(writer, request, input.AccountID)
+	if !ok {
+		return
+	}
+	// The CODEX_HOME comes from the resolved account, never from the request:
+	// otherwise this endpoint would run Codex against any path a caller names.
+	snapshot, err := s.codexLogins.Start(request.Context(), candidate.ID, candidate.Ref, mode)
+	if err != nil {
+		switch {
+		case errors.Is(err, codex.ErrLoginBrowserBusy):
+			writeError(writer, http.StatusConflict, "browser_login_busy",
+				"another browser sign-in is running; use a device code instead")
+		case errors.Is(err, codex.ErrLoginClosed):
+			writeError(writer, http.StatusServiceUnavailable, "shutting_down", "QuotaDeck is shutting down")
+		default:
+			writeError(writer, http.StatusBadGateway, "login_start_failed", "Codex could not start the sign-in")
+		}
+		return
+	}
+	writeJSON(writer, http.StatusOK, snapshot)
+}
+
+func (s *Server) codexLoginStatus(writer http.ResponseWriter, request *http.Request) {
+	if !s.codexLoginAllowed(writer, request) {
+		return
+	}
+	candidate, ok := s.resolveCodexAccount(writer, request, request.URL.Query().Get("accountId"))
+	if !ok {
+		return
+	}
+	// Keyed by account, not by sign-in id: a client that reloaded the page has
+	// forgotten the id, and the SSE stream drops events under load, so this is
+	// the authority rather than a convenience.
+	snapshot, found := s.codexLogins.Current(candidate.Ref)
+	if !found {
+		writeJSON(writer, http.StatusOK, map[string]any{"state": "none", "accountId": candidate.ID})
+		return
+	}
+	writeJSON(writer, http.StatusOK, snapshot)
+}
+
+func (s *Server) cancelCodexLogin(writer http.ResponseWriter, request *http.Request) {
+	if !s.codexLoginAllowed(writer, request) {
+		return
+	}
+	if err := s.codexLogins.Cancel(request.PathValue("loginId")); err != nil {
+		writeError(writer, http.StatusNotFound, "unknown_login", "this sign-in is no longer running")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "canceled"})
+}
+
+func (s *Server) codexLoginAllowed(writer http.ResponseWriter, request *http.Request) bool {
+	if s.codexLogins == nil {
+		writeError(writer, http.StatusServiceUnavailable, "control_unavailable", "Codex sign-in is unavailable")
+		return false
+	}
+	if !isLoopbackRequest(request) {
+		writeError(writer, http.StatusForbidden, "local_only", "provider controls are available from loopback only")
+		return false
+	}
+	if request.Header.Get("X-QuotaDeck-Request") != "control" {
+		writeError(writer, http.StatusForbidden, "csrf_guard", "missing provider control request header")
+		return false
+	}
+	return true
+}
+
+// resolveCodexAccount maps an account id to the home Codex should act on, using
+// what the provider reports now. The store is not consulted: it retains
+// accounts dropped from the configuration, which must not remain targetable.
+func (s *Server) resolveCodexAccount(writer http.ResponseWriter, request *http.Request, accountID string) (domain.AccountCandidate, bool) {
+	if strings.TrimSpace(accountID) == "" {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "accountId is required")
+		return domain.AccountCandidate{}, false
+	}
+	candidate, err := s.engine.DiscoverAccount(request.Context(), "codex", accountID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "unknown_account", "this Codex account is not configured")
+		return domain.AccountCandidate{}, false
+	}
+	if strings.TrimSpace(candidate.Ref) == "" {
+		writeError(writer, http.StatusBadRequest, "unknown_account", "this Codex account has no CODEX_HOME")
+		return domain.AccountCandidate{}, false
+	}
+	return candidate, true
 }

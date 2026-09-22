@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { useTheme } from './theme'
+import { CodexSignIn } from './codexSignIn'
 import './styles.css'
 
 type Provider = { id: string; name: string; enabled: boolean; source: string }
@@ -263,6 +264,7 @@ function App() {
                         unavailable: !control?.claude.available,
                         onSelect: () => void plans.selectClaude(item.account.id),
                       } : undefined}
+                      onSignedIn={() => void load()}
                     />)}
                   </div>
                 </div>
@@ -287,7 +289,7 @@ function App() {
 
 type PlanAction = { busy: boolean; disabled: boolean; unavailable: boolean; onSelect: () => void }
 
-function AccountCard({ state, mode, now, selected, planAction }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean; planAction?: PlanAction }) {
+function AccountCard({ state, mode, now, selected, planAction, onSignedIn }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean; planAction?: PlanAction; onSignedIn?: () => void }) {
   const { account, snapshot } = state
   const windows = snapshot.windows ?? []
   const mostConstrained = windows.reduce<QuotaWindow | null>((selected, window) => {
@@ -309,6 +311,7 @@ function AccountCard({ state, mode, now, selected, planAction }: { state: Accoun
         <StatusBadge snapshot={snapshot} now={now} />
       </div>
       {snapshot.errorMessage && <div class="account-error">{snapshot.errorMessage}</div>}
+      {account.providerId === 'codex' && <CodexSignIn state={state} now={now} onFinished={onSignedIn ?? (() => {})} />}
       <div class="window-list">
         {windows.map(window => (
           <WindowRow key={window.id} window={window} mode={mode} now={now} constrained={window.id === mostConstrained?.id && windows.length > 1} />

@@ -25,13 +25,14 @@ import (
 type Provider struct {
 	binary   string
 	accounts []config.CodexAccountConfig
+	homes    *homeLocks
 }
 
 func New(binary string, accounts []config.CodexAccountConfig) *Provider {
 	if binary == "" {
 		binary = "codex"
 	}
-	return &Provider{binary: binary, accounts: accounts}
+	return &Provider{binary: binary, accounts: accounts, homes: newHomeLocks()}
 }
 
 func (p *Provider) ID() string   { return "codex" }
@@ -70,6 +71,14 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 }
 
 func (p *Provider) Fetch(ctx context.Context, candidate domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	// A rate-limit read renews and rewrites the tokens a sign-in is replacing,
+	// so the two must not overlap on one home. The poll yields, rather than
+	// waiting: a sign-in lasts minutes, and the existing snapshot stays valid.
+	release, ok := p.homes.tryAcquire(canonicalHome(candidate.Ref))
+	if !ok {
+		return domain.Account{}, domain.Snapshot{}, domain.ErrSkipAccount
+	}
+	defer release()
 	accountResult, limitsResult, err := p.rpc(ctx, candidate.Ref)
 	if err != nil {
 		return domain.Account{}, domain.Snapshot{}, err

@@ -23,7 +23,7 @@ docs-build:
 	npm --prefix docs run build
 
 test:
-	node --test tests/cinnamon-applet.test.cjs
+	node --test 'tests/**/*.test.*'
 	npm --prefix web run typecheck
 	$(GO_ENV) go test ./...
 

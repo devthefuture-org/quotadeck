@@ -3,6 +3,8 @@ package poller
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -179,3 +181,117 @@ func TestRefreshReportsAccountFailureAndPreservesAuthStatus(t *testing.T) {
 		t.Fatalf("expected previous quota windows to remain visible, got %#v", state.Snapshot.Windows)
 	}
 }
+
+// blockingProvider holds Fetch open until released, so a refresh can be asked
+// for while the regular poll is demonstrably in flight.
+type blockingProvider struct {
+	release chan struct{}
+	fetches atomic.Int32
+}
+
+func (p *blockingProvider) ID() string   { return "codex" }
+func (p *blockingProvider) Name() string { return "Codex" }
+func (p *blockingProvider) Discover(context.Context) ([]domain.AccountCandidate, error) {
+	return []domain.AccountCandidate{{ID: "codex:home:a", ProviderID: "codex", Label: "Codex", Ref: "/tmp/a"}}, nil
+}
+
+func (p *blockingProvider) Fetch(_ context.Context, candidate domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	if p.fetches.Add(1) == 1 {
+		<-p.release
+	}
+	return domain.Account{ID: candidate.ID, ProviderID: "codex", Label: "Codex"},
+		domain.Snapshot{AccountID: candidate.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh, Windows: []domain.QuotaWindow{}},
+		nil
+}
+
+// RefreshProvider yields when the provider lock is held, returning nil without
+// refreshing. A sign-in that just replaced the credentials cannot accept that:
+// its refresh has to happen once the poll in flight is done.
+func TestRefreshProviderAfterChangeRunsOnceThePollInFlightEnds(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	provider := &blockingProvider{release: make(chan struct{})}
+	engine := New(database, []domain.Provider{provider}, time.Hour, 10*time.Second, 30)
+
+	polling := make(chan struct{})
+	go func() {
+		_ = engine.RefreshProvider(context.Background(), "codex")
+		close(polling)
+	}()
+	waitFor(t, func() bool { return provider.fetches.Load() == 1 })
+
+	engine.RefreshProviderAfterChange("codex")
+	// Several requests while blocked must collapse into one rerun.
+	engine.RefreshProviderAfterChange("codex")
+	close(provider.release)
+	<-polling
+
+	waitFor(t, func() bool { return provider.fetches.Load() == 2 })
+	time.Sleep(200 * time.Millisecond)
+	if got := provider.fetches.Load(); got != 2 {
+		t.Fatalf("expected the reruns to coalesce into one, got %d fetches", got)
+	}
+}
+
+func waitFor(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition never held")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A provider that reports ErrSkipAccount leaves the stored snapshot untouched:
+// a Codex sign-in holding its home is not a failure the user experienced.
+func TestSkippedAccountKeepsItsStoredSnapshot(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	account := domain.Account{ID: "codex:home:a", ProviderID: "codex", Label: "Codex", Source: "CODEX_HOME"}
+	fresh := domain.Snapshot{
+		AccountID: account.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+		Windows: []domain.QuotaWindow{{ID: "codex:primary", Label: "primary", Kind: "rate-limit", UsedPercent: floatValue(12)}},
+	}
+	normalized, err := domain.NormalizeSnapshot(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Save(context.Background(), account, normalized); err != nil {
+		t.Fatal(err)
+	}
+	engine := New(database, []domain.Provider{skippingProvider{}}, time.Hour, time.Second, 30)
+
+	_ = engine.RefreshProvider(context.Background(), "codex")
+
+	state, err := database.Latest(context.Background(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Snapshot.Status != domain.StatusFresh || state.Snapshot.Stale {
+		t.Fatalf("a skipped account must keep its snapshot, got %#v", state.Snapshot)
+	}
+	if len(state.Snapshot.Windows) != 1 {
+		t.Fatalf("expected the stored windows to survive, got %#v", state.Snapshot.Windows)
+	}
+}
+
+type skippingProvider struct{}
+
+func (skippingProvider) ID() string   { return "codex" }
+func (skippingProvider) Name() string { return "Codex" }
+func (skippingProvider) Discover(context.Context) ([]domain.AccountCandidate, error) {
+	return []domain.AccountCandidate{{ID: "codex:home:a", ProviderID: "codex", Label: "Codex", Ref: "/tmp/a"}}, nil
+}
+func (skippingProvider) Fetch(context.Context, domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	return domain.Account{}, domain.Snapshot{}, domain.ErrSkipAccount
+}
+
+func floatValue(value float64) *float64 { return &value }

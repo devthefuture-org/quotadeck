@@ -25,6 +25,18 @@ CODEX_HOME="$HOME/.codex" quotadeck doctor
 
 QuotaDeck does not parse or modify `auth.json`. Each configured home remains an isolated Codex profile. When no account list is configured, the running process's `CODEX_HOME` takes precedence over the default `~/.codex`.
 
+### Signing in from the dashboard
+
+When a Codex account reports **auth error**, its card offers **Reconnect**. QuotaDeck asks the app-server to start a sign-in and shows you the link to open; **Use a code instead** switches to a device code you type on OpenAI's activation page. Either way Codex writes the new credentials into that account's `CODEX_HOME`, exactly as `codex login` would, and the quotas refresh on their own once it succeeds.
+
+Three constraints are worth knowing:
+
+- **Codex hosts the browser callback on a fixed local port** (1455, falling back to 1457), and it cancels whatever already holds that port. So QuotaDeck runs at most one browser sign-in at a time, and starting one here can interrupt a `codex login` running in a terminal — and the reverse. The device code binds no port and is never affected.
+- **Polling pauses for the home being signed in.** A rate-limit read renews and rewrites the same `auth.json` the sign-in is replacing. The account keeps the figures it already had until the sign-in ends.
+- **A sign-in does not survive a QuotaDeck restart**, because the callback lives inside the Codex process. The dashboard says so and offers to start again.
+
+QuotaDeck never reads the credentials themselves: it passes `CODEX_HOME` to Codex and reports what Codex answers.
+
 ## Z.ai / GLM Coding Plan
 
 QuotaDeck can use:
