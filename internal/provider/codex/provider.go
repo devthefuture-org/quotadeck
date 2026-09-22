@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -10,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -153,124 +151,51 @@ func Parse(accountJSON, limitsJSON []byte, candidate domain.AccountCandidate) (d
 }
 
 func (p *Provider) rpc(ctx context.Context, home string) ([]byte, []byte, error) {
-	childContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	binary, err := runner.LookPath(p.binary)
+	connection, err := openConn(ctx, p.binary, home)
 	if err != nil {
-		return nil, nil, &domain.CodedError{Code: "codex_not_found", Err: errors.New("codex executable not found")}
+		return nil, nil, err
 	}
-	command := exec.CommandContext(childContext, binary, "app-server", "--stdio")
-	command.Env = envWith(runner.CommandEnvironment(), "CODEX_HOME", home)
-	// npm launchers spawn the real Codex binary. Cancel that whole process
-	// group so a surviving child cannot hold the RPC pipes open indefinitely.
-	configureProcessGroup(command)
-	command.WaitDelay = time.Second
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("open Codex stdin")}
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		_ = stdin.Close()
-		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("open Codex stdout")}
-	}
-	stderr := &syncBuffer{}
-	command.Stderr = stderr
-	if err := command.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, nil, &domain.CodedError{Code: "codex_start_failed", Err: errors.New("start Codex app-server")}
-	}
-	// exec copies the child's stderr from a goroutine of its own, and only Wait
-	// guarantees that copy is complete. Reading the buffer before then races the
-	// copier and yields whatever happened to have arrived.
-	var reaped sync.Once
-	reap := func() {
-		reaped.Do(func() {
-			cancel()
-			_ = stdin.Close()
-			_ = stdout.Close()
-			_ = command.Wait()
-		})
-	}
-	defer reap()
-	stderrTail := func() string {
-		reap()
-		return stderr.lastLine()
-	}
-	// Stdio reads/writes do not observe context cancellation themselves.
-	// Close them explicitly even if a descendant escaped the process group.
-	stopClosing := context.AfterFunc(childContext, func() {
-		_ = stdin.Close()
-		_ = stdout.Close()
-	})
-	defer stopClosing()
-	encoder := json.NewEncoder(stdin)
-	if err := encoder.Encode(map[string]any{
-		"id": 1, "method": "initialize",
-		"params": map[string]any{"clientInfo": map[string]string{"name": "quotadeck", "title": "QuotaDeck", "version": "0.1.0"}},
+	defer connection.close()
+	if _, err := connection.call(1, "initialize", map[string]any{
+		"clientInfo": map[string]string{"name": "quotadeck", "title": "QuotaDeck", "version": "0.1.0"},
 	}); err != nil {
-		return nil, nil, rpcFailure(home, stderrTail, errors.New("write Codex initialize request"))
+		return nil, nil, rpcFailure(home, connection.stderrTail, err)
 	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-	if _, err := responseByID(scanner, 1); err != nil {
-		return nil, nil, rpcFailure(home, stderrTail, err)
+	// Both waiters are registered before either request is written, so neither
+	// answer can arrive unclaimed and the two may come back in any order.
+	accountWaiter := connection.expect(2)
+	limitsWaiter := connection.expect(3)
+	if err := connection.send(map[string]any{"method": "initialized"}); err != nil {
+		return nil, nil, rpcFailure(home, connection.stderrTail, errors.New("write Codex request"))
 	}
-	for _, message := range []map[string]any{
-		{"method": "initialized"},
-		{"id": 2, "method": "account/read", "params": map[string]bool{"refreshToken": false}},
-		{"id": 3, "method": "account/rateLimits/read", "params": nil},
-	} {
-		if err := encoder.Encode(message); err != nil {
-			return nil, nil, rpcFailure(home, stderrTail, errors.New("write Codex request"))
-		}
+	if err := connection.send(map[string]any{
+		"id": 2, "method": "account/read", "params": map[string]bool{"refreshToken": false},
+	}); err != nil {
+		return nil, nil, rpcFailure(home, connection.stderrTail, errors.New("write Codex request"))
+	}
+	if err := connection.send(map[string]any{
+		"id": 3, "method": "account/rateLimits/read", "params": nil,
+	}); err != nil {
+		return nil, nil, rpcFailure(home, connection.stderrTail, errors.New("write Codex request"))
 	}
 	// Collect both answers before concluding. A per-request error must not end
-	// the read: the other request carries the signal that names the cause, and
-	// the app-server answers them in either order.
-	var accountResult, limitsResult []byte
-	var accountErr, limitsErr error
-	for (accountResult == nil && accountErr == nil) || (limitsResult == nil && limitsErr == nil) {
-		response, err := nextResponse(scanner)
-		if err != nil {
-			var rpc *rpcError
-			if !errors.As(err, &rpc) {
-				// The stream itself failed; nothing further can arrive.
-				return nil, nil, rpcFailure(home, stderrTail, err)
-			}
-			switch response.ID {
-			case 2:
-				accountErr = err
-			case 3:
-				limitsErr = err
-			default:
-				return nil, nil, rpcFailure(home, stderrTail, err)
-			}
-			continue
-		}
-		switch response.ID {
-		case 2:
-			accountResult = response.Result
-		case 3:
-			limitsResult = response.Result
-		}
+	// the read: the other request carries the signal that names the cause.
+	account := <-accountWaiter
+	limits := <-limitsWaiter
+	if account.err != nil {
+		return nil, nil, rpcFailure(home, connection.stderrTail, account.err)
 	}
-	_ = stdin.Close()
-	if accountErr != nil {
-		return nil, nil, rpcFailure(home, stderrTail, accountErr)
-	}
-	if limitsErr != nil {
+	if limits.err != nil {
 		// A CODEX_HOME that was never signed in returns a null account and fails
 		// the rate-limit read with wording of its own. The null account is the
 		// structured signal, and it decides regardless of that wording.
-		if accountAbsent(accountResult) {
+		if accountAbsent(account.result) {
 			return nil, nil, &domain.CodedError{Code: "codex_auth_required", Err: fmt.Errorf(
 				"Codex has no account for CODEX_HOME %s, run `codex login`", home)}
 		}
-		return nil, nil, rpcFailure(home, stderrTail, limitsErr)
+		return nil, nil, rpcFailure(home, connection.stderrTail, limits.err)
 	}
-	return accountResult, limitsResult, nil
+	return account.result, limits.result, nil
 }
 
 func accountAbsent(accountJSON []byte) bool {
@@ -281,47 +206,6 @@ func accountAbsent(accountJSON []byte) bool {
 		return false
 	}
 	return payload.Account == nil || string(*payload.Account) == "null"
-}
-
-type rpcResponse struct {
-	ID     int             `json:"id"`
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-func responseByID(scanner *bufio.Scanner, id int) (json.RawMessage, error) {
-	for {
-		response, err := nextResponse(scanner)
-		if err != nil {
-			return nil, err
-		}
-		if response.ID == id {
-			return response.Result, nil
-		}
-	}
-}
-
-func nextResponse(scanner *bufio.Scanner) (rpcResponse, error) {
-	for scanner.Scan() {
-		var response rpcResponse
-		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-			continue
-		}
-		if response.ID == 0 {
-			continue
-		}
-		if response.Error != nil {
-			return response, &rpcError{Code: response.Error.Code, Message: response.Error.Message}
-		}
-		return response, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return rpcResponse{}, fmt.Errorf("read Codex app-server response: %w", err)
-	}
-	return rpcResponse{}, errors.New("Codex app-server closed before responding")
 }
 
 // rpcError carries the app-server's own wording. Codex answers with a generic

@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bufio"
 	"errors"
 	"strings"
 	"testing"
@@ -78,22 +77,6 @@ func TestRPCFailureKeepsCrashCauseFromStderr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "panicked") {
 		t.Fatalf("expected the crash cause in %v", err)
-	}
-}
-
-// An expired session must not be reported as a transient RPC failure just
-// because it surfaced while awaiting a different request id.
-func TestNextResponseCarriesTheUpstreamMessage(t *testing.T) {
-	scanner := bufio.NewScanner(strings.NewReader(`{"id":3,"error":{"code":-32603,"message":"401 Unauthorized"}}` + "\n"))
-
-	_, err := nextResponse(scanner)
-
-	var rpc *rpcError
-	if !errors.As(err, &rpc) {
-		t.Fatalf("expected an *rpcError, got %T (%v)", err, err)
-	}
-	if rpc.Code != -32603 || rpc.Message != "401 Unauthorized" {
-		t.Fatalf("unexpected rpc error: %#v", rpc)
 	}
 }
 
