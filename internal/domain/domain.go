@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 )
@@ -169,21 +168,21 @@ func NormalizeSnapshot(snapshot Snapshot) (Snapshot, error) {
 		seen[window.ID] = struct{}{}
 		normalized = append(normalized, window)
 	}
-	sort.SliceStable(normalized, func(i, j int) bool {
-		left, right := normalized[i].ResetsAt, normalized[j].ResetsAt
-		if left == nil {
-			return false
-		}
-		if right == nil {
-			return true
-		}
-		return left.Before(*right)
-	})
+	// The provider order is the presentation order. Reset times move independently
+	// and must not make quota indicators jump around between refreshes.
 	snapshot.Windows = normalized
 	return snapshot, nil
 }
 
 func StaleFrom(previous Snapshot, now time.Time, status, code, message string) Snapshot {
+	age := int64(now.Sub(previous.FetchedAt) / time.Second)
+	if age < 0 {
+		age = 0
+	}
+	if previous.SourceAgeSec != nil {
+		age += *previous.SourceAgeSec
+	}
+	previous.SourceAgeSec = &age
 	previous.FetchedAt = now.UTC()
 	if status == "" {
 		status = StatusUnavailable

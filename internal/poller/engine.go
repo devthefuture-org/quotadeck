@@ -168,9 +168,11 @@ func (e *Engine) refreshProvider(parent context.Context, provider domain.Provide
 }
 
 func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, candidate domain.AccountCandidate) error {
+	account, snapshot, fetchErr := provider.Fetch(ctx, candidate)
+	// Give storage its own full budget after the network/CLI call, including
+	// when that call used its entire deadline and we need to persist an error.
 	persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	account, snapshot, fetchErr := provider.Fetch(ctx, candidate)
 	if fetchErr != nil {
 		account = domain.Account{
 			ID: candidate.ID, ProviderID: candidate.ProviderID, Label: candidate.Label,

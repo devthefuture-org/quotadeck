@@ -47,6 +47,12 @@ func TestParseMultiBucketRateLimits(t *testing.T) {
 	if account.Plan != "plus" || len(snapshot.Windows) != 3 {
 		t.Fatalf("unexpected Codex parse: account=%#v snapshot=%#v", account, snapshot)
 	}
+	want := []string{"code-review:primary", "codex:primary", "codex:secondary"}
+	for index, window := range snapshot.Windows {
+		if window.ID != want[index] {
+			t.Fatalf("window %d: expected %q, got %q", index, want[index], window.ID)
+		}
+	}
 }
 
 func TestParseRequiresAuthentication(t *testing.T) {

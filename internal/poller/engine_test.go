@@ -4,11 +4,81 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/store"
 )
+
+type slowProvider struct {
+	failingProvider
+	account domain.Account
+}
+
+func (p slowProvider) Fetch(ctx context.Context, _ domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	select {
+	case <-time.After(6 * time.Second):
+	case <-ctx.Done():
+		return domain.Account{}, domain.Snapshot{}, ctx.Err()
+	}
+	used := 6.0
+	return p.account, domain.Snapshot{
+		AccountID: p.account.ID, FetchedAt: time.Now(), Status: domain.StatusFresh,
+		Windows: []domain.QuotaWindow{{ID: "primary", Label: "Primary", UsedPercent: &used}},
+	}, p.err
+}
+
+func TestSlowFetchPersistsResultAfterStorageTimeoutWouldHaveElapsed(t *testing.T) {
+	for _, outcome := range []string{"success", "failure", "timeout"} {
+		t.Run(outcome, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				database, err := store.Open(t.TempDir() + "/quotadeck.db")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer database.Close()
+				account := domain.Account{ID: "codex:test", ProviderID: "codex", Label: "Codex", Source: "CODEX_HOME"}
+				used := 100.0
+				previous := domain.Snapshot{
+					AccountID: account.ID, FetchedAt: time.Now().Add(-time.Hour), Status: domain.StatusFresh,
+					Windows: []domain.QuotaWindow{{ID: "primary", Label: "Primary", UsedPercent: &used}},
+				}
+				if err := database.Save(t.Context(), account, previous); err != nil {
+					t.Fatal(err)
+				}
+				provider := slowProvider{account: account, failingProvider: failingProvider{
+					candidate: domain.AccountCandidate{ID: account.ID, ProviderID: account.ProviderID, Label: account.Label, Source: account.Source},
+				}}
+				timeout := 20 * time.Second
+				if outcome == "failure" {
+					provider.err = &domain.CodedError{Code: "codex_rpc_failed", Err: errors.New("RPC failed")}
+				} else if outcome == "timeout" {
+					timeout = 5500 * time.Millisecond
+				}
+				engine := New(database, []domain.Provider{provider}, time.Minute, timeout, 30)
+				err = engine.Refresh(t.Context())
+				if (err != nil) != (outcome != "success") {
+					t.Fatalf("unexpected refresh error: %v", err)
+				}
+				state, err := database.Latest(t.Context(), account.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !state.Snapshot.FetchedAt.After(previous.FetchedAt) {
+					t.Fatal("slow fetch left the old snapshot marked fresh")
+				}
+				if outcome == "success" {
+					if state.Snapshot.Stale || *state.Snapshot.Windows[0].UsedPercent != 6 {
+						t.Fatalf("reset quota was not saved: %#v", state.Snapshot)
+					}
+				} else if !state.Snapshot.Stale || state.Snapshot.ErrorCode == "" || *state.Snapshot.Windows[0].UsedPercent != 100 {
+					t.Fatalf("failure was not saved with the last known quota: %#v", state.Snapshot)
+				}
+			})
+		})
+	}
+}
 
 type failingProvider struct {
 	candidate domain.AccountCandidate
