@@ -231,7 +231,7 @@ function App() {
             {Array.from(groups.entries()).map(([provider, items]) => (
               <section class="provider-group" key={provider}>
                 <div class="section-heading">
-                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : provider === 'kimi' ? 'K' : 'Z'}</span>
+                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : provider === 'kimi' ? '☾' : 'Z'}</span>
                   <div><p>{provider === 'claude' ? 'Claude Code' : providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
                 <div class="provider-content">
