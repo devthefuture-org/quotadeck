@@ -58,6 +58,7 @@ See the [installation guide](https://devthefuture-org.github.io/quotadeck/gettin
 - **Claude:** `cswap list --json` is the canonical multi-account source. Explicit plan selection calls `cswap switch <slot> --json`; QuotaDeck never calls `cswap export`, opens its credential store, or refreshes Claude OAuth itself.
 - **Codex:** one `codex app-server --stdio` process per configured `CODEX_HOME` reads account and rate-limit metadata. QuotaDeck does not read or modify `auth.json`.
 - **Z.ai:** explicit environment references, `ZAI_API_KEY`, `GLM_API_KEY`, and recognized Z.ai entries in Claude settings. Tokens never enter the domain model, database, diagnostics, logs, or API responses; in-memory sources are deduplicated with a truncated SHA-256 fingerprint.
+- **Kimi:** the Kimi for Coding plan, read from the Kimi Code usage API with `KIMI_API_KEY`/`KIMI_CODING_API_KEY`, a recognized Kimi base URL in Claude settings, or the signed-in Kimi Code CLI credentials under `~/.kimi-code`. Same privacy rules as Z.ai.
 
 Full setup instructions live in the [provider guide](https://devthefuture-org.github.io/quotadeck/providers).
 

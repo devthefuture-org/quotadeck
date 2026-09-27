@@ -56,8 +56,8 @@ type DoctorReport = {
   sources: { provider: string; source: string; accepted: boolean; reason: string; metadata?: Record<string, string> }[]
 }
 
-const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2 }
-const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai' }
+const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2, kimi: 3 }
+const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi' }
 
 function App() {
   const { theme, selectTheme } = useTheme()
@@ -231,7 +231,7 @@ function App() {
             {Array.from(groups.entries()).map(([provider, items]) => (
               <section class="provider-group" key={provider}>
                 <div class="section-heading">
-                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : 'Z'}</span>
+                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : provider === 'kimi' ? 'K' : 'Z'}</span>
                   <div><p>{provider === 'claude' ? 'Claude Code' : providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
                 <div class="provider-content">

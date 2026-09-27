@@ -32,6 +32,7 @@ func TestDisabledProvidersNeverAcceptSources(t *testing.T) {
 	cfg.Providers.Claude.Enabled = false
 	cfg.Providers.ZAI.Enabled = false
 	cfg.Providers.Codex.Enabled = false
+	cfg.Providers.Kimi.Enabled = false
 
 	report := (Collector{Config: cfg, Version: "test"}).Collect(t.Context())
 	for _, source := range report.Sources {

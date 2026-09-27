@@ -150,6 +150,7 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .provider-glyph.claude { background: #d8805a; color: #281008; }
 .provider-glyph.codex { background: #edf1e7; color: #17201a; }
 .provider-glyph.zai { background: #748cff; color: #0d1233; }
+.provider-glyph.kimi { background: #8fe3d2; color: #0a1f1a; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 350px), 1fr)); gap: 16px; }
 .account-card { display: flex; flex-direction: column; background: var(--card-bg); border: 1px solid var(--line); border-radius: 22px; padding: 22px; min-width: 0; box-shadow: var(--card-shadow); }
 .account-card:hover { border-color: var(--line-strong); }

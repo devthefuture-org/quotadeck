@@ -14,6 +14,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/poller"
 	"github.com/devthefuture-org/quotadeck/internal/provider/claudecswap"
 	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
+	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
 	"github.com/devthefuture-org/quotadeck/internal/provider/zai"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 	"github.com/devthefuture-org/quotadeck/internal/store"
@@ -110,6 +111,9 @@ func buildProviders(cfg config.Config) ([]domain.Provider, *codex.Provider) {
 	if cfg.Providers.Codex.Enabled {
 		codexProvider = codex.New(cfg.Providers.Codex.Binary, cfg.Providers.Codex.Accounts)
 		providers = append(providers, codexProvider)
+	}
+	if cfg.Providers.Kimi.Enabled {
+		providers = append(providers, kimi.New(cfg.Providers.Kimi))
 	}
 	return providers, codexProvider
 }

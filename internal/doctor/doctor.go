@@ -3,8 +3,10 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,11 +51,12 @@ func (c Collector) Collect(ctx context.Context) Report {
 	}
 	selfPath, _ := os.Executable()
 	report.Tools = append(report.Tools, Tool{Name: "quotadeck", Present: true, Path: selfPath, Version: "quotadeck " + c.Version})
-	for _, name := range []string{"cswap", "codex", "codexbar"} {
+	for _, name := range []string{"cswap", "codex", "codexbar", "kimi"} {
 		report.Tools = append(report.Tools, inspectTool(ctx, name))
 	}
 	report.Sources = append(report.Sources, c.claudeSources()...)
 	report.Sources = append(report.Sources, c.zaiSources()...)
+	report.Sources = append(report.Sources, c.kimiSources()...)
 	report.Sources = append(report.Sources, c.codexSources()...)
 	return report
 }
@@ -195,4 +198,72 @@ func boolString(value bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func (c Collector) kimiSources() []SourceCheck {
+	var checks []SourceCheck
+	for _, account := range c.Config.Providers.Kimi.Accounts {
+		present := strings.TrimSpace(os.Getenv(account.KeyEnv)) != ""
+		reason := "referenced environment variable is absent"
+		if !c.Config.Providers.Kimi.Enabled {
+			reason = "provider disabled"
+		} else if present {
+			reason = "configured environment reference is present"
+		}
+		checks = append(checks, SourceCheck{Provider: "kimi", Source: "environment", Accepted: c.Config.Providers.Kimi.Enabled && present, Reason: reason, Metadata: map[string]string{"keyEnv": account.KeyEnv, "secretPresent": boolString(present)}})
+	}
+	for _, key := range []string{"KIMI_API_KEY", "KIMI_CODING_API_KEY"} {
+		present := strings.TrimSpace(os.Getenv(key)) != ""
+		reason := presentReason(present)
+		if !c.Config.Providers.Kimi.Enabled {
+			reason = "provider disabled"
+		}
+		checks = append(checks, SourceCheck{Provider: "kimi", Source: "environment", Accepted: c.Config.Providers.Kimi.Enabled && present, Reason: reason, Metadata: map[string]string{"keyEnv": key, "secretPresent": boolString(present)}})
+	}
+	paths := append([]string(nil), c.Config.Providers.Kimi.SettingsPaths...)
+	if len(paths) == 0 {
+		paths = []string{"~/.claude/settings.json"}
+	}
+	for _, rawPath := range paths {
+		path := config.ExpandPath(rawPath)
+		baseURL, hasToken, err := inspectClaudeSettings(path)
+		accepted := c.Config.Providers.Kimi.Enabled && err == nil && hasToken && recognizedKimi(baseURL)
+		reason := "file missing or invalid"
+		if !c.Config.Providers.Kimi.Enabled {
+			reason = "provider disabled"
+		} else if err == nil && !hasToken {
+			reason = "ANTHROPIC_AUTH_TOKEN is absent"
+		} else if err == nil && !recognizedKimi(baseURL) {
+			reason = "ANTHROPIC_BASE_URL is not a recognized Kimi endpoint"
+		} else if accepted {
+			reason = "recognized Kimi endpoint with a credential present"
+		}
+		checks = append(checks, SourceCheck{Provider: "kimi", Source: "claude-settings", Accepted: accepted, Reason: reason, Metadata: map[string]string{"path": path, "baseURL": baseURL, "secretPresent": boolString(hasToken)}})
+	}
+	homePaths := append([]string(nil), c.Config.Providers.Kimi.HomePaths...)
+	if len(homePaths) == 0 {
+		homePaths = []string{"~/.kimi-code"}
+	}
+	for _, rawHome := range homePaths {
+		home := config.ExpandPath(rawHome)
+		matches, err := filepath.Glob(filepath.Join(home, "credentials", "*.json"))
+		present := err == nil && len(matches) > 0
+		reason := presentReason(present)
+		if !c.Config.Providers.Kimi.Enabled {
+			reason = "provider disabled"
+		} else if present {
+			reason = "Kimi CLI credential file present"
+		}
+		checks = append(checks, SourceCheck{Provider: "kimi", Source: "kimi-cli", Accepted: c.Config.Providers.Kimi.Enabled && present, Reason: reason, Metadata: map[string]string{"home": home, "credentialCount": strconv.Itoa(len(matches)), "secretPresent": boolString(present)}})
+	}
+	return checks
+}
+
+func recognizedKimi(baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com")
 }

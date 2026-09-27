@@ -37,6 +37,7 @@ type ProvidersConfig struct {
 	Claude ClaudeConfig `yaml:"claude"`
 	ZAI    ZAIConfig    `yaml:"zai"`
 	Codex  CodexConfig  `yaml:"codex"`
+	Kimi   KimiConfig   `yaml:"kimi"`
 }
 
 type ClaudeConfig struct {
@@ -72,6 +73,22 @@ type CodexAccountConfig struct {
 	Home  string `yaml:"home"`
 }
 
+type KimiConfig struct {
+	Enabled        bool                `yaml:"enabled"`
+	Accounts       []KimiAccountConfig `yaml:"accounts"`
+	SettingsPaths  []string            `yaml:"settingsPaths"`
+	HomePaths      []string            `yaml:"homePaths"`
+	BaseURL        string              `yaml:"baseURL"`
+	RequestTimeout string              `yaml:"requestTimeout"`
+	MaxRetries     int                 `yaml:"maxRetries"`
+}
+
+type KimiAccountConfig struct {
+	Label   string `yaml:"label"`
+	KeyEnv  string `yaml:"keyEnv"`
+	BaseURL string `yaml:"baseURL"`
+}
+
 func Default() Config {
 	dataDir := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
 	if dataDir == "" {
@@ -90,6 +107,7 @@ func Default() Config {
 			Claude: ClaudeConfig{Enabled: true, Binary: "cswap"},
 			ZAI:    ZAIConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
 			Codex:  CodexConfig{Enabled: true, Binary: "codex"},
+			Kimi:   KimiConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
 		},
 	}
 }
@@ -161,6 +179,14 @@ func (c Config) PollTimeout() (time.Duration, error) {
 
 func (c ZAIConfig) Timeout() time.Duration {
 	value, err := duration(c.RequestTimeout, 15*time.Second, "providers.zai.requestTimeout")
+	if err != nil {
+		return 15 * time.Second
+	}
+	return value
+}
+
+func (c KimiConfig) Timeout() time.Duration {
+	value, err := duration(c.RequestTimeout, 15*time.Second, "providers.kimi.requestTimeout")
 	if err != nil {
 		return 15 * time.Second
 	}

@@ -47,6 +47,17 @@ QuotaDeck can use:
 
 Bearer credentials are read only from their configured private sources and attached only to validated HTTPS quota endpoints. They never enter domain objects, SQLite, diagnostics, logs, or API responses. Multiple sources for the same secret are deduplicated through a truncated in-memory SHA-256 fingerprint.
 
+## Kimi Code
+
+QuotaDeck reads the Kimi for Coding plan from the Kimi Code usage API:
+
+- `KIMI_API_KEY` or `KIMI_CODING_API_KEY` from its process environment;
+- explicit environment references in `config.yaml`;
+- a recognized Kimi base URL (`api.kimi.com`) in Claude settings;
+- Kimi Code CLI credential files under `~/.kimi-code/credentials`.
+
+The same privacy rules as Z.ai apply: credentials stay in memory, are deduplicated by fingerprint, and never reach storage, logs, or API responses. All windows the API returns are shown — the 5-hour window, the monthly total, and the monthly coding quota.
+
 ## Selecting the active Claude Code plan
 
 The dashboard groups quota usage and plan selection in the same view. Compare consumption and reset times, then select:

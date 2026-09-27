@@ -73,6 +73,21 @@ systemctl --user restart quotadeck.service
 Keep the file outside source control and readable only by your user.
 When running `quotadeck serve` directly, expose the same variables in the process environment.
 
+## Kimi Code
+
+Kimi for Coding is discovered automatically when Kimi Code CLI is signed in: QuotaDeck reads the credential file under `~/.kimi-code/credentials` in memory only. Alternatively, expose a Kimi key the same way as Z.ai:
+
+```yaml
+providers:
+  kimi:
+    enabled: true
+    accounts:
+      - label: personal
+        keyEnv: KIMI_API_KEY
+```
+
+`KIMI_API_KEY` and `KIMI_CODING_API_KEY` are checked even without configuration. A Kimi base URL in `~/.claude/settings.json` is also recognized, so routing Claude Code through Kimi makes the plan appear without extra setup.
+
 ## Dashboard configuration
 
 Open **Manage plans** on the dashboard for the same setup without editing files manually:

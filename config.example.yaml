@@ -39,3 +39,17 @@ providers:
         home: ~/.codex
       - label: work
         home: ~/.codex-work
+
+  kimi:
+    enabled: true
+    requestTimeout: 15s
+    maxRetries: 3
+    # Discovered automatically: KIMI_API_KEY / KIMI_CODING_API_KEY environment
+    # variables, a Kimi base URL in ~/.claude/settings.json, and Kimi Code CLI
+    # credential files under ~/.kimi-code/credentials. Explicit accounts below
+    # are optional and win deduplication.
+    # accounts:
+    #   - label: personal
+    #     keyEnv: KIMI_API_KEY_PERSONAL
+    # homePaths:
+    #   - ~/.kimi-code
