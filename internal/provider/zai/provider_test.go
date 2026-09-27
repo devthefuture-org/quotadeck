@@ -60,6 +60,7 @@ func TestDiscoverIncludesManagedDefaultAlongsideExplicitAccounts(t *testing.T) {
 	t.Setenv("MISSING_EXPLICIT_KEY", "")
 	cfg := config.Default().Providers.ZAI
 	cfg.Accounts = []config.ZAIAccountConfig{{Label: "Unavailable team", KeyEnv: "MISSING_EXPLICIT_KEY"}}
+	cfg.SettingsPaths = []string{filepath.Join(t.TempDir(), "absent-settings.json")}
 
 	accounts, err := New(cfg).Discover(t.Context())
 	if err != nil {
