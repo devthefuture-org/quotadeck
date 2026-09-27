@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
+	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
 
@@ -246,13 +247,19 @@ func (c Collector) kimiSources() []SourceCheck {
 	}
 	for _, rawHome := range homePaths {
 		home := config.ExpandPath(rawHome)
-		matches, err := filepath.Glob(filepath.Join(home, "credentials", "*.json"))
-		present := err == nil && len(matches) > 0
+		matches, _ := filepath.Glob(filepath.Join(home, "credentials", "*.json"))
+		present := false
+		for _, match := range matches {
+			if kimi.CredentialHasToken(match) {
+				present = true
+				break
+			}
+		}
 		reason := presentReason(present)
 		if !c.Config.Providers.Kimi.Enabled {
 			reason = "provider disabled"
 		} else if present {
-			reason = "Kimi CLI credential file present"
+			reason = "Kimi CLI credential with an access_token is present"
 		}
 		checks = append(checks, SourceCheck{Provider: "kimi", Source: "kimi-cli", Accepted: c.Config.Providers.Kimi.Enabled && present, Reason: reason, Metadata: map[string]string{"home": home, "credentialCount": strconv.Itoa(len(matches)), "secretPresent": boolString(present)}})
 	}

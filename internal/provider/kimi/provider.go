@@ -58,7 +58,7 @@ func (s secret) resolve() (string, error) {
 		}
 	case "settings":
 		settings, err := readClaudeSettings(s.Path)
-		if err == nil && settings.Token != "" {
+		if err == nil && settings.Token != "" && recognizedBaseURL(settings.BaseURL) {
 			return settings.Token, nil
 		}
 	case "cli":
@@ -112,14 +112,26 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 	// UI-managed keys remain valid even when advanced explicit accounts are
 	// configured. Explicit entries are appended first and win deduplication,
 	// preserving their labels and endpoint overrides.
+	// When both default keys are set, the labels carry the variable name — two
+	// anonymous "Kimi" accounts would be indistinguishable in the dashboard.
+	presentDefaults := 0
+	for _, keyRef := range []string{"KIMI_API_KEY", "KIMI_CODING_API_KEY"} {
+		if strings.TrimSpace(os.Getenv(keyRef)) != "" {
+			presentDefaults++
+		}
+	}
 	for _, keyRef := range []string{"KIMI_API_KEY", "KIMI_CODING_API_KEY"} {
 		token := strings.TrimSpace(os.Getenv(keyRef))
 		if token == "" {
 			continue
 		}
+		label := "Kimi"
+		if presentDefaults > 1 {
+			label = "Kimi (" + keyRef + ")"
+		}
 		ref := "env:" + keyRef
 		items = append(items, discovered{
-			candidate: candidate(ref, "Kimi", "environment", map[string]string{
+			candidate: candidate(ref, label, "environment", map[string]string{
 				"keyEnv": keyRef, "secretPresent": "true",
 			}),
 			secret: secret{Token: token, BaseURL: baseURLFor(p.config, ""), Kind: "env", EnvKey: keyRef},
@@ -277,7 +289,11 @@ func Parse(body []byte) ([]domain.QuotaWindow, error) {
 		if !ok {
 			continue
 		}
-		if err := appendWindow(limitWindow(limit, index)); err != nil {
+		window, ok := limitWindow(limit, index)
+		if !ok {
+			continue
+		}
+		if err := appendWindow(window); err != nil {
 			return nil, &domain.CodedError{Code: "invalid_limit", Err: err}
 		}
 	}
@@ -308,10 +324,8 @@ func ratioWindow(key string, entry map[string]any) domain.QuotaWindow {
 		Kind:  "quota",
 	}
 	if ratio, ok := firstNumber(entry, "used_ratio", "usedRatio"); ok {
-		percent := ratio * 100
-		window.UsedPercent = &percent
-		remaining := 100 - percent
-		window.RemainingPercent = &remaining
+		window.UsedPercent = clampPercent(ratio * 100)
+		window.RemainingPercent = clampPercent(100 - ratio*100)
 	} else if used, ok := firstNumber(entry, "used", "used_amount"); ok {
 		if total, ok := firstNumber(entry, "limit", "limit_amount"); ok && total > 0 {
 			window.Used = &used
@@ -324,7 +338,7 @@ func ratioWindow(key string, entry map[string]any) domain.QuotaWindow {
 
 // limitWindow builds a window from a limits[] entry carrying a billing window
 // and concrete amounts: {window: {duration, timeUnit}, detail: {...}}.
-func limitWindow(limit map[string]any, index int) domain.QuotaWindow {
+func limitWindow(limit map[string]any, index int) (domain.QuotaWindow, bool) {
 	detail, _ := limit["detail"].(map[string]any)
 	if detail == nil {
 		detail = limit
@@ -353,7 +367,10 @@ func limitWindow(limit map[string]any, index int) domain.QuotaWindow {
 		window.Remaining = &remaining
 	}
 	window.ResetsAt = parseReset(detail)
-	return window
+	if window.Used == nil && window.Limit == nil && window.Remaining == nil && window.UsedPercent == nil && window.ResetsAt == nil {
+		return domain.QuotaWindow{}, false
+	}
+	return window, true
 }
 
 // dataWindow builds a window from a data[] entry keyed by model name.
@@ -380,13 +397,28 @@ func dataWindow(entry map[string]any, index int) domain.QuotaWindow {
 	if remaining, ok := firstNumber(entry, "remaining", "remaining_amount"); ok {
 		window.Remaining = &remaining
 	}
-	if ratio, ok := firstNumber(entry, "used_ratio", "usedRatio", "percentage"); ok {
-		window.UsedPercent = &ratio
-		remaining := 100 - ratio
-		window.RemainingPercent = &remaining
+	if ratio, ok := firstNumber(entry, "used_ratio", "usedRatio"); ok {
+		// used_ratio is 0-1 in every observed payload; percentage is 0-100.
+		window.UsedPercent = clampPercent(ratio * 100)
+	} else if percentage, ok := firstNumber(entry, "percentage"); ok {
+		window.UsedPercent = clampPercent(percentage)
+	}
+	if window.UsedPercent != nil {
+		remaining := 100 - *window.UsedPercent
+		window.RemainingPercent = clampPercent(remaining)
 	}
 	window.ResetsAt = parseReset(entry)
 	return window
+}
+
+func clampPercent(value float64) *float64 {
+	if value < 0 {
+		value = 0
+	}
+	if value > 100 {
+		value = 100
+	}
+	return &value
 }
 
 func windowMinutes(billingWindow map[string]any) float64 {
@@ -395,7 +427,7 @@ func windowMinutes(billingWindow map[string]any) float64 {
 	}
 	duration, hasDuration := firstNumber(billingWindow, "duration")
 	unit := firstString(billingWindow, "timeUnit", "time_unit")
-	if !hasDuration || duration <= 0 {
+	if !hasDuration || duration <= 0 || math.IsInf(duration, 0) || math.IsNaN(duration) {
 		return 0
 	}
 	switch strings.ToUpper(unit) {
@@ -418,7 +450,7 @@ func parseReset(entry map[string]any) *time.Time {
 			return parsed
 		}
 	}
-	if seconds, ok := firstNumber(entry, "reset_in", "resetIn"); ok && seconds > 0 {
+	if seconds, ok := firstNumber(entry, "reset_in", "resetIn"); ok && seconds > 0 && seconds < 10*365*24*3600 {
 		reset := time.Now().UTC().Add(time.Duration(seconds) * time.Second)
 		return &reset
 	}
@@ -531,6 +563,15 @@ func readCredentialToken(path string) (string, error) {
 	return strings.TrimSpace(root.AccessToken), nil
 }
 
+// CredentialHasToken reports whether a Kimi CLI credential file carries a
+// non-empty access_token, without exposing the value. The doctor uses it to
+// keep its accepted/rejected verdicts aligned with what Discover actually
+// accepts.
+func CredentialHasToken(path string) bool {
+	token, err := readCredentialToken(path)
+	return err == nil && token != ""
+}
+
 func candidate(ref, label, source string, meta map[string]string) domain.AccountCandidate {
 	sum := sha256.Sum256([]byte(ref))
 	return domain.AccountCandidate{
@@ -563,9 +604,9 @@ func (p *Provider) request(ctx context.Context, baseURL, token string) ([]byte, 
 	endpoints := []string{strings.TrimRight(baseURL, "/") + "/usages", strings.TrimRight(baseURL, "/") + "/usage"}
 	var lastStatus int
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		body, statusCode, err := p.attempt(ctx, endpoints[0], token)
+		body, statusCode, retryAfter, err := p.attempt(ctx, endpoints[0], token)
 		if err != nil && statusCode == http.StatusNotFound {
-			body, statusCode, err = p.attempt(ctx, endpoints[1], token)
+			body, statusCode, retryAfter, err = p.attempt(ctx, endpoints[1], token)
 		}
 		if err == nil {
 			return body, statusCode, nil
@@ -578,7 +619,7 @@ func (p *Provider) request(ctx context.Context, baseURL, token string) ([]byte, 
 			break
 		}
 		if (statusCode == http.StatusTooManyRequests || statusCode >= 500 || statusCode == 0) && attempt < maxRetries {
-			if err := sleep(ctx, backoff(attempt, "")); err != nil {
+			if err := sleep(ctx, backoff(attempt, retryAfter)); err != nil {
 				return nil, statusCode, err
 			}
 			continue
@@ -588,29 +629,29 @@ func (p *Provider) request(ctx context.Context, baseURL, token string) ([]byte, 
 	return nil, lastStatus, fmt.Errorf("Kimi returned HTTP %d", lastStatus)
 }
 
-func (p *Provider) attempt(ctx context.Context, endpoint, token string) ([]byte, int, error) {
+func (p *Provider) attempt(ctx context.Context, endpoint, token string) ([]byte, int, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := p.client.Do(request)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
+	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	_ = response.Body.Close()
 	if readErr != nil {
-		return nil, response.StatusCode, errors.New("read Kimi response")
+		return nil, response.StatusCode, "", errors.New("read Kimi response")
 	}
 	if len(body) > maxResponseBytes {
-		return nil, response.StatusCode, errors.New("Kimi response is too large")
+		return nil, response.StatusCode, "", errors.New("Kimi response is too large")
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
-		return body, response.StatusCode, nil
+		return body, response.StatusCode, "", nil
 	}
-	return nil, response.StatusCode, fmt.Errorf("Kimi returned HTTP %d", response.StatusCode)
+	return nil, response.StatusCode, response.Header.Get("Retry-After"), fmt.Errorf("Kimi returned HTTP %d", response.StatusCode)
 }
 
 func usageLabel(key string) string {

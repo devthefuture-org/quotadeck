@@ -53,7 +53,7 @@ QuotaDeck reads the Kimi for Coding plan from the Kimi Code usage API:
 
 - `KIMI_API_KEY` or `KIMI_CODING_API_KEY` from its process environment;
 - explicit environment references in `config.yaml`;
-- a recognized Kimi base URL (`api.kimi.com`) in Claude settings;
+- a recognized Kimi base URL in Claude settings (any `*.kimi.com` host, e.g. `api.kimi.com`);
 - Kimi Code CLI credential files under `~/.kimi-code/credentials`.
 
 The same privacy rules as Z.ai apply: credentials stay in memory, are deduplicated by fingerprint, and never reach storage, logs, or API responses. All windows the API returns are shown — the 5-hour window, the monthly total, and the monthly coding quota.

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,34 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.PollTimeout(); err != nil {
 		return err
+	}
+	if _, err := duration(c.Providers.ZAI.RequestTimeout, 15*time.Second, "providers.zai.requestTimeout"); err != nil {
+		return err
+	}
+	if _, err := duration(c.Providers.Kimi.RequestTimeout, 15*time.Second, "providers.kimi.requestTimeout"); err != nil {
+		return err
+	}
+	if err := validateKimiBaseURL(c.Providers.Kimi.BaseURL, "providers.kimi.baseURL"); err != nil {
+		return err
+	}
+	for index, account := range c.Providers.Kimi.Accounts {
+		if err := validateKimiBaseURL(account.BaseURL, fmt.Sprintf("providers.kimi.accounts[%d].baseURL", index)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateKimiBaseURL refuses anything but absolute HTTPS URLs, so a typo in
+// an explicit endpoint can never silently redirect requests to the production
+// API.
+func validateKimiBaseURL(raw, field string) error {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("%s must be an absolute HTTPS URL", field)
 	}
 	return nil
 }

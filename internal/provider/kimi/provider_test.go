@@ -2,6 +2,9 @@ package kimi
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,9 +221,164 @@ func TestResolveRereadsRotatedCredential(t *testing.T) {
 
 func TestRecognizedBaseURLRejectsUnrelatedAnthropicProxy(t *testing.T) {
 	if recognizedBaseURL("https://example.com/api/anthropic") {
-		t.Fatal("unrelated base URL must never promote ANTHROPIC_AUTH_TOKEN to a Kimi key")
+		t.Fatal("unrelated base URL must never promote a credential to a Kimi key")
 	}
 	if !recognizedBaseURL("https://api.kimi.com") {
 		t.Fatal("expected official Kimi base URL")
+	}
+}
+
+// fetchFrom sends the provider through a test server so the HTTP layer —
+// classification, retries, and the /usage fallback — runs under test.
+func fetchFrom(t *testing.T, p *Provider, handler http.HandlerFunc) (domain.Account, domain.Snapshot, error) {
+	t.Helper()
+	t.Setenv("KIMI_HTTP_FIXTURE_KEY", "kimi-http-fixture-token")
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	p.client = server.Client()
+	p.secrets = map[string]secret{"test": {Token: "kimi-http-fixture-token", BaseURL: server.URL, Kind: "env", EnvKey: "KIMI_HTTP_FIXTURE_KEY"}}
+	return p.Fetch(t.Context(), domain.AccountCandidate{ID: "kimi:test", ProviderID: "kimi", Ref: "test"})
+}
+
+func TestFetchClassifiesResponses(t *testing.T) {
+	provider := New(config.KimiConfig{Enabled: true})
+
+	_, snapshot, err := fetchFrom(t, provider, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usages" && r.Header.Get("Authorization") != "Bearer kimi-http-fixture-token" {
+			t.Errorf("request must carry the bearer credential")
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	var coded *domain.CodedError
+	if !errors.As(err, &coded) || coded.Code != "kimi_auth_error" {
+		t.Fatalf("401 must classify as kimi_auth_error, got %#v", err)
+	}
+
+	_, _, err = fetchFrom(t, New(config.KimiConfig{Enabled: true}), func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	if !errors.As(err, &coded) || coded.Code != "kimi_auth_error" {
+		t.Fatalf("403 must classify as kimi_auth_error, got %#v", err)
+	}
+
+	_, _, err = fetchFrom(t, New(config.KimiConfig{Enabled: true}), func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	if !errors.As(err, &coded) || coded.Code != "kimi_unavailable" {
+		t.Fatalf("404 on both endpoints must classify as kimi_unavailable, got %#v", err)
+	}
+
+	account, snapshot, err := fetchFrom(t, New(config.KimiConfig{Enabled: true}), func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usage" {
+			w.Write([]byte(`{"usages": {"limit_5h": {"used_ratio": 0.25, "reset_time": "2026-10-24T00:00:00Z"}}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	if err != nil {
+		t.Fatalf("404 on /usages must fall back to /usage: %v", err)
+	}
+	if len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent == nil || *snapshot.Windows[0].UsedPercent != 25 {
+		t.Fatalf("fallback payload not parsed: %#v", snapshot.Windows)
+	}
+	if account.ID != "kimi:test" {
+		t.Fatalf("unexpected account: %#v", account)
+	}
+}
+
+func TestFetchRetriesServerErrorsThenSucceeds(t *testing.T) {
+	calls := 0
+	_, snapshot, err := fetchFrom(t, New(config.KimiConfig{Enabled: true, MaxRetries: 2}), func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"usages": {"limit_month_code": {"used_ratio": 0.1}}}`))
+	})
+	if err != nil {
+		t.Fatalf("retry after 500s must succeed: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("expected 3 calls (2 failures then success), got %d", calls)
+	}
+	if len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent == nil || *snapshot.Windows[0].UsedPercent != 10 {
+		t.Fatalf("payload after retries not parsed: %#v", snapshot.Windows)
+	}
+}
+
+func TestFetchRejectsHTMLBody(t *testing.T) {
+	_, _, err := fetchFrom(t, New(config.KimiConfig{Enabled: true}), func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html>gateway error page</html>"))
+	})
+	var coded *domain.CodedError
+	if !errors.As(err, &coded) || coded.Code != "invalid_json" {
+		t.Fatalf("an HTML body must classify as invalid_json, got %#v", err)
+	}
+}
+
+func TestDataWindowRatioScale(t *testing.T) {
+	windows, err := Parse([]byte(`{"data": [{"model_name": "k2", "used_ratio": 0.42, "used": 42, "limit": 100}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 1 || windows[0].UsedPercent == nil || *windows[0].UsedPercent != 42 {
+		t.Fatalf("data[] used_ratio must be read on the 0-1 scale: %#v", windows)
+	}
+}
+
+func TestDataWindowKeepsPercentageRaw(t *testing.T) {
+	windows, err := Parse([]byte(`{"data": [{"model_name": "k2", "percentage": 42}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 1 || windows[0].UsedPercent == nil || *windows[0].UsedPercent != 42 {
+		t.Fatalf("data[] percentage must stay on the 0-100 scale: %#v", windows)
+	}
+}
+
+func TestParseSkipsLimitEntriesWithoutNumbers(t *testing.T) {
+	windows, err := Parse([]byte(`{"limits": [{"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}, "detail": {"note": "empty"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 0 {
+		t.Fatalf("an entry without any amount must not become an empty window: %#v", windows)
+	}
+}
+
+func TestBothDefaultKeysGetDistinctLabels(t *testing.T) {
+	t.Setenv("KIMI_API_KEY", "kimi-primary-fixture-token")
+	t.Setenv("KIMI_CODING_API_KEY", "kimi-secondary-fixture-token")
+	provider := newTestProvider(t)
+	candidates, err := provider.Discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("both keys must produce two accounts, got %#v", candidates)
+	}
+	if candidates[0].Label == candidates[1].Label {
+		t.Fatalf("labels must be distinguishable: %q vs %q", candidates[0].Label, candidates[1].Label)
+	}
+}
+
+func TestSettingsResolveRevalidatesBaseURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	credentials := secret{Kind: "settings", Path: path}
+	// A proxy token left in settings after switching away from Kimi must not
+	// be handed to the Kimi API.
+	if err := os.WriteFile(path, []byte(`{"env": {"ANTHROPIC_BASE_URL": "https://proxy.example.com", "ANTHROPIC_AUTH_TOKEN": "proxy-fixture-token"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := credentials.resolve(); err == nil {
+		t.Fatal("resolve must refuse a token whose base URL is no longer a Kimi endpoint")
+	}
+	if err := os.WriteFile(path, []byte(`{"env": {"ANTHROPIC_BASE_URL": "https://api.kimi.com", "ANTHROPIC_AUTH_TOKEN": "kimi-fixture-token"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := credentials.resolve(); err != nil || token != "kimi-fixture-token" {
+		t.Fatalf("resolve must hand over the token for a Kimi endpoint: token=%q err=%v", token, err)
 	}
 }
