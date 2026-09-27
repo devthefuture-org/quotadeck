@@ -16,7 +16,7 @@ const POLL_SECONDS = 60;
 const RETRY_SECONDS = 5;
 const OFFLINE_FAILURE_THRESHOLD = 3;
 const SERVICE_START_COOLDOWN_SECONDS = 30;
-const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai' };
+const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi' };
 
 class QuotaDeckApplet extends Applet.Applet {
     constructor(metadata, orientation, panelHeight, instanceId) {
@@ -302,7 +302,7 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _indicatorActor(provider, text, level, indicator = null) {
-        const supported = ['claude', 'codex', 'zai'];
+        const supported = ['claude', 'codex', 'zai', 'kimi'];
         const blocked = indicator && this._blockedWindow(indicator.item);
         const filename = blocked ? 'icon-claude-blocked.svg' : supported.includes(provider)
             ? 'icon-' + provider + '.svg'
