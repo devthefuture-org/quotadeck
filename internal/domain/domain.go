@@ -201,6 +201,32 @@ func StaleFrom(previous Snapshot, now time.Time, status, code, message string) S
 	return previous
 }
 
+// WindowsPastReset rewrites windows whose reset time has passed to 0% used,
+// so the current state stops displaying a pre-reset 100% that no longer says
+// anything about the present. Applied at read time only: stored snapshots and
+// history keep the values that were true when they were fetched, and the
+// caller's slice is left untouched.
+func WindowsPastReset(states []AccountState, now time.Time) []AccountState {
+	result := make([]AccountState, len(states))
+	copy(result, states)
+	for index := range result {
+		windows := make([]QuotaWindow, len(result[index].Snapshot.Windows))
+		copy(windows, result[index].Snapshot.Windows)
+		result[index].Snapshot.Windows = windows
+		for wIndex := range windows {
+			window := &windows[wIndex]
+			if window.ResetsAt == nil || window.UsedPercent == nil || !now.After(*window.ResetsAt) {
+				continue
+			}
+			window.UsedPercent = floatPtr(0)
+			if window.RemainingPercent != nil {
+				window.RemainingPercent = floatPtr(100)
+			}
+		}
+	}
+	return result
+}
+
 func floatPtr(value float64) *float64 { return &value }
 
 func clampPercent(value float64) float64 {

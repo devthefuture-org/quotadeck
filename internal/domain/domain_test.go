@@ -57,3 +57,36 @@ func TestNormalizeSnapshotPreservesProviderWindowOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowsPastResetZeroesOnlyExpiredWindows(t *testing.T) {
+	now := time.Now()
+	expired := now.Add(-time.Hour)
+	upcoming := now.Add(time.Hour)
+	used := 100.0
+	remaining := 0.0
+	futureUsed := 42.0
+	states := []AccountState{{Snapshot: Snapshot{Windows: []QuotaWindow{
+		{ID: "expired", UsedPercent: &used, RemainingPercent: &remaining, ResetsAt: &expired},
+		{ID: "upcoming", UsedPercent: &futureUsed, ResetsAt: &upcoming},
+		{ID: "no-reset", UsedPercent: &futureUsed},
+		{ID: "no-usage", ResetsAt: &expired},
+	}}}}
+
+	clamped := WindowsPastReset(states, now)
+	windows := clamped[0].Snapshot.Windows
+	if *windows[0].UsedPercent != 0 || *windows[0].RemainingPercent != 100 {
+		t.Fatalf("expected the expired window to read 0%% used / 100%% remaining, got %#v", windows[0])
+	}
+	if *windows[1].UsedPercent != 42 || windows[1].RemainingPercent != nil {
+		t.Fatalf("a window that has not reset yet must stay untouched, got %#v", windows[1])
+	}
+	if *windows[2].UsedPercent != 42 {
+		t.Fatalf("a window without a reset time must stay untouched, got %#v", windows[2])
+	}
+	if windows[3].UsedPercent != nil || windows[3].RemainingPercent != nil {
+		t.Fatalf("a window without usage data must stay untouched, got %#v", windows[3])
+	}
+	if *states[0].Snapshot.Windows[0].UsedPercent != 100 {
+		t.Fatal("the original state must not be mutated")
+	}
+}

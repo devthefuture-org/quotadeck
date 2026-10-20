@@ -378,6 +378,48 @@ func TestRefreshKeepsAccountsWhenDiscoveryFails(t *testing.T) {
 
 func floatValue(value float64) *float64 { return &value }
 
+// A window whose reset time has passed reads as 0% until the next refresh:
+// the pre-reset 100% says nothing about the present. The stored snapshot
+// itself keeps the value that was true when it was fetched.
+func TestCurrentClampsWindowsPastTheirReset(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	account := domain.Account{ID: "kimi:kimi-code-cli:x", ProviderID: "kimi", Label: "Kimi Code CLI", Source: "kimi-cli"}
+	resetAt := time.Now().UTC().Add(-time.Hour)
+	used := 100.0
+	snapshot := domain.Snapshot{
+		AccountID: account.ID, FetchedAt: time.Now().UTC().Add(-2 * time.Hour), Status: domain.StatusFresh,
+		Windows: []domain.QuotaWindow{{ID: "five-hour", Label: "5 hours", UsedPercent: &used, ResetsAt: &resetAt}},
+	}
+	normalized, err := domain.NormalizeSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Save(ctx, account, normalized); err != nil {
+		t.Fatal(err)
+	}
+	engine := New(database, []domain.Provider{discoveryProvider{id: "kimi"}}, time.Hour, time.Second, 30)
+
+	stored, err := database.LatestStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *stored[0].Snapshot.Windows[0].UsedPercent != 100 {
+		t.Fatalf("the store must keep the fetched value, got %#v", stored[0].Snapshot.Windows[0])
+	}
+	current, err := engine.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := *current[0].Snapshot.Windows[0].UsedPercent; got != 0 {
+		t.Fatalf("expected the expired window to read 0%%, got %v%%", got)
+	}
+}
+
 type discoveryProvider struct {
 	id          string
 	candidates  []domain.AccountCandidate

@@ -124,7 +124,7 @@ func (e *Engine) Current(ctx context.Context) ([]domain.AccountState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return states, nil
+	return domain.WindowsPastReset(states, time.Now()), nil
 }
 
 func (e *Engine) History(ctx context.Context, accountID string, from, to time.Time) ([]domain.Snapshot, error) {
