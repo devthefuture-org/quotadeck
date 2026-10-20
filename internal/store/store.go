@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -316,6 +317,35 @@ func (s *Store) Prune(ctx context.Context, before time.Time) (int64, error) {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM snapshots WHERE fetched_at < ?", before.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("prune snapshots: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// PruneAccounts removes the provider's accounts that discovery no longer
+// reports; their snapshots go with them. keep must carry the discovered ids —
+// an empty set would delete every account of the provider and is refused.
+func (s *Store) PruneAccounts(ctx context.Context, providerID string, keep map[string]bool) (int64, error) {
+	ids := make([]string, 0, len(keep))
+	for id, wanted := range keep {
+		if wanted {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return 0, errors.New("prune accounts: empty keep set would remove every account")
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, providerID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM accounts WHERE provider_id = ? AND id NOT IN ("+placeholders+")", args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune accounts: %w", err)
 	}
 	return result.RowsAffected()
 }

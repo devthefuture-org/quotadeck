@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync/atomic"
@@ -294,4 +295,105 @@ func (skippingProvider) Fetch(context.Context, domain.AccountCandidate) (domain.
 	return domain.Account{}, domain.Snapshot{}, domain.ErrSkipAccount
 }
 
+// A successful discovery is the authority on which accounts exist: a slot the
+// source stopped reporting must leave the store instead of being displayed
+// forever with its last snapshot.
+func TestRefreshRemovesAccountsDiscoveryNoLongerReports(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	seed := func(id, providerID string) {
+		t.Helper()
+		used := 10.0
+		account := domain.Account{ID: id, ProviderID: providerID, Label: id, Source: "cswap"}
+		snapshot := domain.Snapshot{
+			AccountID: id, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+			Windows: []domain.QuotaWindow{{ID: "five-hour", Label: "5 hours", UsedPercent: &used}},
+		}
+		if err := database.Save(ctx, account, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("claude:cswap:1", "claude")
+	seed("claude:cswap:2", "claude")
+	seed("codex:home:a", "codex")
+
+	provider := discoveryProvider{
+		id: "claude",
+		candidates: []domain.AccountCandidate{
+			{ID: "claude:cswap:2", ProviderID: "claude", Label: "Claude", Ref: "2"},
+		},
+	}
+	engine := New(database, []domain.Provider{provider}, time.Hour, time.Second, 30)
+	if err := engine.Refresh(ctx); err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	if _, err := database.Latest(ctx, "claude:cswap:1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected the removed slot to leave the store, got err=%v", err)
+	}
+	if _, err := database.Latest(ctx, "claude:cswap:2"); err != nil {
+		t.Fatalf("expected the discovered account to survive, got err=%v", err)
+	}
+	if _, err := database.Latest(ctx, "codex:home:a"); err != nil {
+		t.Fatalf("expected other providers to be untouched, got err=%v", err)
+	}
+}
+
+// A failed discovery says nothing about which accounts exist: the outage must
+// not wipe the stored rows it could not see.
+func TestRefreshKeepsAccountsWhenDiscoveryFails(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	used := 10.0
+	account := domain.Account{ID: "claude:cswap:1", ProviderID: "claude", Label: "Claude", Source: "cswap"}
+	snapshot := domain.Snapshot{
+		AccountID: account.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+		Windows: []domain.QuotaWindow{{ID: "five-hour", Label: "5 hours", UsedPercent: &used}},
+	}
+	if err := database.Save(ctx, account, snapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := discoveryProvider{
+		id:          "claude",
+		discoverErr: errors.New("cswap executable not found"),
+	}
+	engine := New(database, []domain.Provider{provider}, time.Hour, time.Second, 30)
+	if err := engine.Refresh(ctx); err == nil {
+		t.Fatal("expected refresh to report the discovery failure")
+	}
+
+	if _, err := database.Latest(ctx, "claude:cswap:1"); err != nil {
+		t.Fatalf("an outage must not wipe stored accounts, got err=%v", err)
+	}
+}
+
 func floatValue(value float64) *float64 { return &value }
+
+type discoveryProvider struct {
+	id          string
+	candidates  []domain.AccountCandidate
+	discoverErr error
+}
+
+func (p discoveryProvider) ID() string   { return p.id }
+func (p discoveryProvider) Name() string { return "Discovery provider" }
+func (p discoveryProvider) Discover(context.Context) ([]domain.AccountCandidate, error) {
+	return p.candidates, p.discoverErr
+}
+func (p discoveryProvider) Fetch(_ context.Context, candidate domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	used := 42.0
+	return domain.Account{ID: candidate.ID, ProviderID: candidate.ProviderID, Label: candidate.Label},
+		domain.Snapshot{
+			AccountID: candidate.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+			Windows: []domain.QuotaWindow{{ID: "five-hour", Label: "5 hours", UsedPercent: &used}},
+		}, nil
+}

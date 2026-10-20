@@ -12,3 +12,4 @@
 *.deb
 .DS_Store
 coverage.out
+.local-backups

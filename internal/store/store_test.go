@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -79,6 +80,66 @@ func TestConcurrentSavesPersistEveryAccount(t *testing.T) {
 	}
 	if len(states) != accounts {
 		t.Fatalf("expected %d states, got %d", accounts, len(states))
+	}
+}
+
+func TestPruneAccountsRemovesOnlyStaleAccountsOfOneProvider(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "quotadeck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+
+	seed := func(id, providerID, label string) {
+		t.Helper()
+		used := 10.0
+		account := domain.Account{ID: id, ProviderID: providerID, Label: label, Source: "test"}
+		snapshot := domain.Snapshot{
+			AccountID: id, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+			Windows: []domain.QuotaWindow{{ID: "primary", Label: "Primary", UsedPercent: &used}},
+		}
+		if err := database.Save(ctx, account, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("claude:cswap:1", "claude", "ghost")
+	seed("claude:cswap:2", "claude", "live")
+	seed("codex:home:a", "codex", "other provider")
+
+	deleted, err := database.PruneAccounts(ctx, "claude", map[string]bool{"claude:cswap:2": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one removed account, got %d", deleted)
+	}
+	if _, err := database.Latest(ctx, "claude:cswap:1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected the stale account to be gone, got err=%v", err)
+	}
+	if _, err := database.Latest(ctx, "claude:cswap:2"); err != nil {
+		t.Fatalf("expected the discovered account to survive, got err=%v", err)
+	}
+	if _, err := database.Latest(ctx, "codex:home:a"); err != nil {
+		t.Fatalf("expected other providers to be untouched, got err=%v", err)
+	}
+	history, err := database.History(ctx, "claude:cswap:1", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("expected the stale account's snapshots to cascade, got %d", len(history))
+	}
+}
+
+func TestPruneAccountsRefusesEmptyKeepSet(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "quotadeck.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.PruneAccounts(t.Context(), "claude", map[string]bool{}); err == nil {
+		t.Fatal("an empty keep set would wipe the provider and must be refused")
 	}
 }
 

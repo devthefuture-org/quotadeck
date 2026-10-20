@@ -120,7 +120,11 @@ func (e *Engine) RefreshProvider(ctx context.Context, providerID string) error {
 }
 
 func (e *Engine) Current(ctx context.Context) ([]domain.AccountState, error) {
-	return e.store.LatestStates(ctx)
+	states, err := e.store.LatestStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return states, nil
 }
 
 func (e *Engine) History(ctx context.Context, accountID string, from, to time.Time) ([]domain.Snapshot, error) {
@@ -207,6 +211,16 @@ func (e *Engine) runProviderRefresh(parent context.Context, provider domain.Prov
 		err := &domain.CodedError{Code: "source_missing", Err: errors.New("no account source discovered")}
 		e.markProviderUnavailable(provider.ID(), err)
 		return fmt.Errorf("%s discovery: %w", provider.ID(), err)
+	}
+	// Discovery succeeded, so it is the authority on which accounts exist.
+	// Removing the rows the source stopped reporting keeps the store from
+	// displaying removed accounts forever; an outage above already returned.
+	keep := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		keep[candidate.ID] = true
+	}
+	if _, err := e.store.PruneAccounts(ctx, provider.ID(), keep); err != nil {
+		return fmt.Errorf("%s prune stale accounts: %w", provider.ID(), err)
 	}
 	var wait sync.WaitGroup
 	errorsChannel := make(chan error, len(candidates))
