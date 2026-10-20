@@ -5,6 +5,8 @@ const fs = require('node:fs');
 class Actor {
     constructor(props) { Object.assign(this, props); this.children = []; }
     add_actor(actor) { this.children.push(actor); }
+    set_text(text) { this.text = text; }
+    remove_style_class_name() {}
 }
 const context = vm.createContext({
     imports: { gi: { versions: {}, Clutter: { ActorAlign: { CENTER: 0 } },
@@ -16,6 +18,7 @@ vm.runInContext(fs.readFileSync('packaging/cinnamon/quotadeck@local/applet.js', 
 function fixture() {
     const applet = Object.create(context.AppletClass.prototype);
     Object.assign(applet, { _control: { mode: 'claude', claude: { activeAccountId: 'a' } },
+        actor: new Actor(), menu: { isOpen: false },
         _metadata: { path: '/applet' }, _panelIconSize: 16, thresholdAlertEnabled: true, thresholdAlertPercent: 80 });
     const item = { account: { id: 'a', providerId: 'claude' }, snapshot: { windows: [
         { id: 'five-hour', usedPercent: 100, resetsAt: new Date(Date.now() + 3600000).toISOString() },

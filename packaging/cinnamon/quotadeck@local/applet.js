@@ -24,9 +24,16 @@ class QuotaDeckApplet extends Applet.Applet {
 
         this._metadata = metadata;
         this._session = new Soup.Session({ timeout: 12 });
+        this._cancellable = new Gio.Cancellable();
+        this._destroyed = false;
+        this._renderSourceId = 0;
+        this._displayStatus = 'loading';
+        this._panelActors = [];
+        this._menuRows = [];
         this._timeoutId = 0;
         this._retryId = 0;
         this._requestInFlight = false;
+        this._requestToken = 0;
         this._consecutiveFailures = 0;
         this._serviceStartAttemptedAt = 0;
         this._state = null;
@@ -45,6 +52,11 @@ class QuotaDeckApplet extends Applet.Applet {
         this.menu = this._applet_context_menu;
         this._quotaSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._quotaSection);
+        this._menuStateChangedId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+            if (isOpen && !this._destroyed) {
+                this._renderVisibleMenu();
+            }
+        });
 
         this._migrateLegacySettings(metadata.uuid, instanceId);
         this._settings = new Settings.AppletSettings(this, metadata.uuid, instanceId);
@@ -55,6 +67,10 @@ class QuotaDeckApplet extends Applet.Applet {
         this._renderLoading();
         this._loadState();
         this._timeoutId = Mainloop.timeout_add_seconds(POLL_SECONDS, () => {
+            // A libsoup completion can be lost without any error (the service
+            // restarting mid-request): after a full cycle the slot is stale,
+            // and the poll is the only thing that can take it back.
+            this._requestInFlight = false;
             this._loadState();
             return true;
         });
@@ -100,51 +116,85 @@ class QuotaDeckApplet extends Applet.Applet {
 
     on_panel_icon_size_changed(size) {
         this._panelIconSize = size;
-        if (this._state) {
-            this._renderState(this._state);
-        }
+        this._scheduleRender();
     }
 
     on_applet_removed_from_panel() {
-        if (this._timeoutId) {
-            Mainloop.source_remove(this._timeoutId);
-            this._timeoutId = 0;
+        if (this._destroyed) {
+            return;
         }
-        if (this._retryId) {
-            Mainloop.source_remove(this._retryId);
-            this._retryId = 0;
+        // Cancellation may synchronously complete requests: mark disposed first.
+        this._destroyed = true;
+        for (const key of ['_timeoutId', '_retryId', '_renderSourceId']) {
+            if (this[key]) {
+                Mainloop.source_remove(this[key]);
+                this[key] = 0;
+            }
         }
+        this.menu.disconnect(this._menuStateChangedId);
+        this._cancellable.cancel();
         this._session.abort();
         this._settings.finalize();
+        // Keep JS wrappers alive until their native actors have been destroyed.
+        // Otherwise their destroy callbacks can run later, during CJS GC.
+        this._quotaSection.destroy();
+        this._menuRows = [];
+        this._panelActors.forEach(actor => actor.destroy());
+        this._panelActors = [];
+        this._indicatorBox.destroy();
+    }
+
+    _scheduleRender() {
+        if (this._destroyed || !this._displayStatus || this._renderSourceId) {
+            return;
+        }
+        // Render outside Soup callbacks and coalesce settings/network updates.
+        this._renderSourceId = Mainloop.idle_add(() => {
+            this._renderSourceId = 0;
+            if (this._destroyed) {
+                return false;
+            }
+            if (this._displayStatus === 'offline') {
+                this._renderOffline();
+            } else if (this._displayStatus === 'reconnecting') {
+                this._renderReconnecting();
+            } else if (this._state) {
+                this._renderState(this._state);
+            }
+            return false;
+        });
     }
 
     _loadState() {
-        if (this._requestInFlight) {
+        if (this._destroyed || this._requestInFlight) {
             return;
         }
         this._requestInFlight = true;
+        const token = ++this._requestToken;
         this._request('GET', '/api/v1/state', null, (error, state) => {
+            // A completion the poll cycle already gave up on owns nothing.
+            if (token !== this._requestToken) {
+                return;
+            }
             this._requestInFlight = false;
             if (error) {
                 this._consecutiveFailures += 1;
-                if (!this._state || this._consecutiveFailures >= OFFLINE_FAILURE_THRESHOLD) {
-                    this._renderOffline();
-                } else {
-                    this._renderReconnecting();
-                }
+                this._displayStatus = !this._state || this._consecutiveFailures >= OFFLINE_FAILURE_THRESHOLD
+                    ? 'offline' : 'reconnecting';
+                this._scheduleRender();
                 this._startServiceOnce();
                 this._scheduleRetry();
                 return;
             }
             this._consecutiveFailures = 0;
             this._serviceStartAttemptedAt = 0;
-            this.actor.remove_style_class_name('quotadeck-reconnecting');
             if (this._retryId) {
                 Mainloop.source_remove(this._retryId);
                 this._retryId = 0;
             }
             this._state = state;
-            this._renderState(state);
+            this._displayStatus = 'ready';
+            this._scheduleRender();
             this._loadControl();
         });
     }
@@ -155,14 +205,12 @@ class QuotaDeckApplet extends Applet.Applet {
                 return;
             }
             this._control = control;
-            if (this._state) {
-                this._renderState(this._state);
-            }
+            this._scheduleRender();
         });
     }
 
     _scheduleRetry() {
-        if (this._retryId) {
+        if (this._destroyed || this._retryId) {
             return;
         }
         this._retryId = Mainloop.timeout_add_seconds(RETRY_SECONDS, () => {
@@ -173,21 +221,29 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _request(method, path, headers, callback) {
+        if (this._destroyed) {
+            return;
+        }
         const message = Soup.Message.new(method, API_ROOT + path);
         if (headers) {
             Object.keys(headers).forEach(name => message.get_request_headers().append(name, headers[name]));
         }
-        this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
+        this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, this._cancellable, (session, result) => {
+            let error = null;
+            let data = null;
             try {
                 const bytes = session.send_and_read_finish(result);
                 if (message.status_code < 200 || message.status_code >= 300) {
-                    callback(new Error('HTTP ' + message.status_code), null);
-                    return;
+                    throw new Error('HTTP ' + message.status_code);
                 }
                 const raw = ByteArray.toString(bytes.get_data());
-                callback(null, raw ? JSON.parse(raw) : {});
-            } catch (error) {
-                callback(error, null);
+                data = raw ? JSON.parse(raw) : {};
+            } catch (requestError) {
+                error = requestError;
+            }
+            if (!this._destroyed) {
+                // A consumer error is not a network error: never call it twice.
+                callback(error, data);
             }
         });
     }
@@ -211,19 +267,15 @@ class QuotaDeckApplet extends Applet.Applet {
 
     _renderLoading() {
         this._renderPanelMessage('—', 'normal');
-        this._quotaSection.removeAll();
-        this._quotaSection.addMenuItem(this._labelItem(_('Loading quotas…')));
     }
 
     _renderOffline() {
         this.actor.remove_style_class_name('quotadeck-reconnecting');
         this._renderPanelMessage('offline', 'offline');
         this.set_applet_tooltip(_('QuotaDeck local service is unavailable'));
-        this._quotaSection.removeAll();
-        this._quotaSection.addMenuItem(this._labelItem(_('QuotaDeck service is offline')));
-        this._quotaSection.addMenuItem(this._labelItem(_('The applet will retry automatically.')));
-        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addActions();
+        if (this.menu.isOpen) {
+            this._renderVisibleMenu();
+        }
     }
 
     _renderReconnecting() {
@@ -232,6 +284,7 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _renderState(state) {
+        this.actor.remove_style_class_name('quotadeck-reconnecting');
         const accounts = Array.isArray(state.accounts) ? state.accounts : [];
         this._refreshSettingsOptions(accounts);
         const indicators = this._selectIndicators(accounts);
@@ -247,21 +300,72 @@ class QuotaDeckApplet extends Applet.Applet {
             : indicators.map(indicator => this._indicatorSummary(indicator));
         this.set_applet_tooltip(['QuotaDeck', ...summaries].join('\n'));
 
-        this._renderMenu(accounts);
+        if (this.menu.isOpen) {
+            this._renderMenu(accounts);
+        }
+    }
+
+    _renderVisibleMenu() {
+        if (this._displayStatus === 'offline') {
+            this._setMenuRows([
+                { text: _('QuotaDeck service is offline') },
+                { text: _('The applet will retry automatically.') },
+                { kind: 'separator' },
+                ...this._actionRows(),
+            ]);
+        } else if (this._state) {
+            this._renderMenu(Array.isArray(this._state.accounts) ? this._state.accounts : []);
+        } else {
+            this._setMenuRows([{ text: _('Loading quotas…') }]);
+        }
     }
 
     _renderMenu(accounts) {
-        this._quotaSection.removeAll();
-        this._quotaSection.addMenuItem(this._labelItem(_('QuotaDeck · local quotas'), 'quotadeck-menu-title'));
-        this._quotaSection.addMenuItem(this._labelItem(_('Selected Claude Code plan'), 'quotadeck-plan-heading'));
-        this._quotaSection.addMenuItem(this._labelItem('  ' + this._selectedPlanLabel(accounts), 'quotadeck-selected-plan'));
-        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const rows = [
+            { text: _('QuotaDeck · local quotas'), styleClass: 'quotadeck-menu-title' },
+            { text: _('Selected Claude Code plan'), styleClass: 'quotadeck-plan-heading' },
+            { text: '  ' + this._selectedPlanLabel(accounts), styleClass: 'quotadeck-selected-plan' },
+            { kind: 'separator' },
+        ];
         if (accounts.length === 0) {
-            this._quotaSection.addMenuItem(this._labelItem(_('No account detected yet')));
+            rows.push({ text: _('No account detected yet') });
         }
-        accounts.forEach(item => this._addAccount(item));
-        this._quotaSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addActions();
+        accounts.forEach(item => rows.push(...this._accountRows(item)));
+        rows.push({ kind: 'separator' }, ...this._actionRows());
+        this._setMenuRows(rows);
+    }
+
+    _setMenuRows(rows) {
+        rows.forEach((row, index) => {
+            let entry = this._menuRows[index];
+            if (!entry || entry.kind !== row.kind || entry.id !== row.id) {
+                if (entry) {
+                    entry.item.destroy();
+                }
+                const item = row.kind === 'separator' ? new PopupMenu.PopupSeparatorMenuItem()
+                    : row.kind === 'action' ? new PopupMenu.PopupIconMenuItem(row.text, row.icon, St.IconType.SYMBOLIC)
+                    : this._labelItem(row.text);
+                if (row.activate) {
+                    item.connect('activate', row.activate);
+                }
+                this._quotaSection.addMenuItem(item, index);
+                entry = { kind: row.kind, id: row.id, item };
+                this._menuRows[index] = entry;
+            }
+            if (row.text !== undefined && entry.item.label.text !== row.text) {
+                entry.item.label.set_text(row.text);
+            }
+            if (entry.styleClass !== row.styleClass) {
+                if (entry.styleClass) {
+                    entry.item.actor.remove_style_class_name(entry.styleClass);
+                }
+                if (row.styleClass) {
+                    entry.item.actor.add_style_class_name(row.styleClass);
+                }
+                entry.styleClass = row.styleClass;
+            }
+        });
+        this._menuRows.splice(rows.length).forEach(entry => entry.item.destroy());
     }
 
     _selectedPlanLabel(accounts) {
@@ -284,61 +388,100 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _renderPanelMessage(text, level) {
-        this._indicatorBox.destroy_all_children();
-        this._indicatorBox.add_actor(this._indicatorActor(null, text, level));
+        this._renderPanelItems([{ provider: null, text, level }]);
     }
 
     _renderPanelIndicators(indicators) {
-        this._indicatorBox.destroy_all_children();
         if (indicators.length === 0) {
-            this._indicatorBox.add_actor(this._indicatorActor(null, '—', 'normal'));
+            this._renderPanelMessage('—', 'normal');
             return;
         }
-        indicators.forEach(indicator => {
-            const provider = ((indicator.item || {}).account || {}).providerId;
-            const text = indicator.used === null ? '—' : Math.round(indicator.used) + '%';
-            this._indicatorBox.add_actor(this._indicatorActor(provider, text, this._indicatorLevel(indicator), indicator));
+        this._renderPanelItems(indicators.map(indicator => ({
+            provider: ((indicator.item || {}).account || {}).providerId,
+            text: indicator.used === null ? '—' : Math.round(indicator.used) + '%',
+            level: this._indicatorLevel(indicator), indicator,
+        })));
+    }
+
+    _renderPanelItems(items) {
+        items.forEach(({ provider, text, level, indicator }, index) => {
+            if (this._panelActors[index]) {
+                this._updateIndicatorActor(this._panelActors[index], provider, text, level, indicator);
+            } else {
+                const actor = this._indicatorActor(provider, text, level, indicator);
+                this._panelActors.push(actor);
+                this._indicatorBox.add_actor(actor);
+            }
         });
+        this._panelActors.splice(items.length).forEach(actor => actor.destroy());
     }
 
     _indicatorActor(provider, text, level, indicator = null) {
+        const box = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER });
+        const icon = new St.Icon();
+        const label = new St.Label({ y_align: Clutter.ActorAlign.CENTER, style_class: 'applet-label quotadeck-indicator-value' });
+        box.add_actor(icon);
+        box.add_actor(label);
+        box._quotaView = { icon, label, alert: null, spec: {} };
+        this._updateIndicatorActor(box, provider, text, level, indicator);
+        return box;
+    }
+
+    _updateIndicatorActor(box, provider, text, level, indicator = null) {
         const supported = ['claude', 'codex', 'zai', 'kimi'];
         const blocked = indicator && this._blockedWindow(indicator.item);
         const filename = blocked ? 'icon-claude-blocked.svg' : supported.includes(provider)
             ? 'icon-' + provider + '.svg'
             : 'icon-symbolic.svg';
         const selected = indicator && this._isSelectedClaude(indicator.item);
-        const box = new St.BoxLayout({
+        const spec = {
             style_class: 'quotadeck-indicator quotadeck-' + level + (selected ? ' quotadeck-selected-indicator' : ''),
-            y_align: Clutter.ActorAlign.CENTER,
             style: 'border: 2px solid ' + (selected ? '#7ab7ff' : 'transparent')
                 + '; border-radius: 6px; padding: 2px 4px;'
                 + (selected ? ' background-color: #253b50;' : ''),
-        });
-        const icon = new St.Icon({
-            gicon: new Gio.FileIcon({
-                file: Gio.File.new_for_path(GLib.build_filenamev([this._metadata.path, filename])),
-            }),
-            icon_type: supported.includes(provider) ? St.IconType.FULLCOLOR : St.IconType.SYMBOLIC,
+            filename, text, icon_type: supported.includes(provider) ? St.IconType.FULLCOLOR : St.IconType.SYMBOLIC,
             icon_size: this._panelIconSize,
-            style_class: 'quotadeck-provider-icon quotadeck-provider-' + (provider || 'default'),
-        });
-        const label = new St.Label({
-            text,
-            y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'applet-label quotadeck-indicator-value',
-        });
-        box.add_actor(icon);
-        box.add_actor(label);
-        if (!blocked && indicator && this._thresholdReached(indicator)) {
-            box.add_actor(new St.Icon({
+            iconClass: 'quotadeck-provider-icon quotadeck-provider-' + (provider || 'default'),
+            alert: Boolean(!blocked && indicator && this._thresholdReached(indicator)),
+        };
+        const view = box._quotaView;
+        for (const key of ['style_class', 'style']) {
+            if (view.spec[key] !== spec[key]) {
+                box[key] = spec[key];
+            }
+        }
+        if (view.spec.filename !== filename) {
+            view.icon.gicon = new Gio.FileIcon({
+                file: Gio.File.new_for_path(GLib.build_filenamev([this._metadata.path, filename])),
+            });
+        }
+        for (const key of ['icon_type', 'icon_size']) {
+            if (view.spec[key] !== spec[key]) {
+                view.icon[key] = spec[key];
+            }
+        }
+        if (view.spec.iconClass !== spec.iconClass) {
+            view.icon.style_class = spec.iconClass;
+        }
+        if (view.spec.text !== text) {
+            view.label.set_text(text);
+        }
+        if (spec.alert && !view.alert) {
+            view.alert = new St.Icon({
                 icon_name: 'dialog-warning-symbolic',
                 icon_type: St.IconType.SYMBOLIC,
                 icon_size: this._panelIconSize,
                 style_class: 'quotadeck-alert-icon',
-            }));
+            });
+            box.add_actor(view.alert);
+        } else if (!spec.alert && view.alert) {
+            view.alert.destroy();
+            view.alert = null;
         }
-        return box;
+        if (view.alert && view.spec.icon_size !== spec.icon_size) {
+            view.alert.icon_size = spec.icon_size;
+        }
+        view.spec = spec;
     }
 
     _isSelectedClaude(item) {
@@ -380,9 +523,7 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _onDisplaySelectionChanged() {
-        if (this._state) {
-            this._renderState(this._state);
-        }
+        this._scheduleRender();
     }
 
     _refreshSettingsOptions(accounts) {
@@ -544,46 +685,35 @@ class QuotaDeckApplet extends Applet.Applet {
         return notes.join(' · ');
     }
 
-    _addAccount(item) {
+    _accountRows(item) {
         const account = item.account || {};
         const snapshot = item.snapshot || {};
         const provider = account.providerId || 'provider';
         const status = snapshot.status || 'unknown';
-        this._quotaSection.addMenuItem(this._labelItem(
-            (account.label || provider) + '  ·  ' + status,
-            'quotadeck-account-title'
-        ));
+        const rows = [{ text: (account.label || provider) + '  ·  ' + status, styleClass: 'quotadeck-account-title' }];
 
         const windows = Array.isArray(snapshot.windows) ? snapshot.windows : [];
         if (windows.length === 0) {
-            this._quotaSection.addMenuItem(this._labelItem('  ' + _('No quota window'), 'quotadeck-window-muted'));
-            return;
+            rows.push({ text: '  ' + _('No quota window'), styleClass: 'quotadeck-window-muted' });
+            return rows;
         }
         windows.forEach(window => {
             const used = this._usedPercent(window);
             const percentage = used === null ? '—' : Math.round(used) + '%';
             const reset = window.resetsAt ? this._formatReset(window.resetsAt) : _('no reset');
-            this._quotaSection.addMenuItem(this._labelItem(
-                '  ' + (window.label || _('Window')) + ':  ' + percentage + '  ·  ' + reset,
-                'quotadeck-window'
-            ));
+            rows.push({ text: '  ' + (window.label || _('Window')) + ':  ' + percentage + '  ·  ' + reset, styleClass: 'quotadeck-window' });
         });
+        return rows;
     }
 
-    _addActions() {
-        const open = new PopupMenu.PopupIconMenuItem(_('Open QuotaDeck'), 'quotadeck', St.IconType.SYMBOLIC);
-        open.connect('activate', () => this._openDashboard());
-        this._quotaSection.addMenuItem(open);
-
-        const refresh = new PopupMenu.PopupIconMenuItem(_('Refresh now'), 'view-refresh-symbolic', St.IconType.SYMBOLIC);
-        refresh.connect('activate', () => {
-            this._request('POST', '/api/v1/refresh', { 'X-QuotaDeck-Request': 'refresh' }, () => this._loadState());
-        });
-        this._quotaSection.addMenuItem(refresh);
-
-        const configure = new PopupMenu.PopupIconMenuItem(_('Configure panel indicators'), 'preferences-system-symbolic', St.IconType.SYMBOLIC);
-        configure.connect('activate', () => this.configureApplet());
-        this._quotaSection.addMenuItem(configure);
+    _actionRows() {
+        return [
+            { kind: 'action', id: 'open', text: _('Open QuotaDeck'), icon: 'quotadeck', activate: () => this._openDashboard() },
+            { kind: 'action', id: 'refresh', text: _('Refresh now'), icon: 'view-refresh-symbolic', activate: () => {
+                this._request('POST', '/api/v1/refresh', { 'X-QuotaDeck-Request': 'refresh' }, () => this._loadState());
+            } },
+            { kind: 'action', id: 'configure', text: _('Configure panel indicators'), icon: 'preferences-system-symbolic', activate: () => this.configureApplet() },
+        ];
     }
 
     _openDashboard() {
