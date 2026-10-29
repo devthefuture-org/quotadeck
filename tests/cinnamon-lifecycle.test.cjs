@@ -10,6 +10,7 @@ function harness() {
     const sources = new Map();
     const requests = [];
     let nextId = 1;
+    let spawnError = null;
     class Signals {
         constructor() { this.signals = new Map(); }
         connect(name, callback) { const id = nextId++; this.signals.set(id, { name, callback }); return id; }
@@ -70,13 +71,25 @@ function harness() {
         _saveToFile() {}
         finalize() { metrics.finalized++; }
     }
-    class Session {
-        send_and_read_async(message, priority, cancellable, callback) { requests.push({ message, cancellable, callback, session: this }); }
-        send_and_read_finish(result) {
-            if (result instanceof Error) throw result;
-            return { get_data: () => result };
+    class Subprocess {
+        static new(argv) {
+            if (spawnError) { const error = spawnError; spawnError = null; throw error; }
+            return new Subprocess(argv);
         }
-        abort() { this.aborted = true; }
+        constructor(argv) { this.argv = argv; this.successful = true; }
+        communicate_utf8_async(input, cancellable, callback) {
+            assert.equal(input, null);
+            requests.push({
+                message: { method: this.argv[this.argv.indexOf('--request') + 1], url: this.argv.at(-1) },
+                argv: this.argv, cancellable, callback, process: this,
+            });
+        }
+        communicate_utf8_finish(result) {
+            if (result instanceof Error) throw result;
+            return result;
+        }
+        get_successful() { return this.successful; }
+        force_exit() { this.killed = true; }
     }
     const mainloop = {
         idle_add(callback) { const id = nextId++; sources.set(id, { callback, idle: true }); return id; },
@@ -90,7 +103,7 @@ function harness() {
                 Gio: {
                     Cancellable: class { cancel() { this.cancelled = true; } },
                     FileIcon: class { constructor(props) { Object.assign(this, props); } },
-                    File: { new_for_path: p => p }, Subprocess: { new() {} }, SubprocessFlags: { NONE: 0 },
+                    File: { new_for_path: p => p }, Subprocess, SubprocessFlags: { NONE: 0, STDOUT_PIPE: 1, STDERR_PIPE: 2 },
                 },
                 GLib: {
                     build_filenamev: parts => parts.join('/'), get_user_config_dir: () => '/config',
@@ -98,9 +111,8 @@ function harness() {
                     get_monotonic_time: () => 60_000_000,
                 },
                 St: { BoxLayout: Actor, Label: Actor, Icon: Actor, IconType: { SYMBOLIC: 0, FULLCOLOR: 1 }, Side: { LEFT: 1, RIGHT: 2 } },
-                Soup: { Session, Message: { new: (method, url) => ({ method, url, status_code: 200, get_request_headers: () => ({ append() {} }) }) } },
             },
-            byteArray: { toString: bytes => bytes.toString() }, mainloop,
+            mainloop,
             ui: { applet: { Applet, AllowedLayout: { BOTH: 0 } }, settings: { AppletSettings: Settings }, popupMenu: {
                 PopupMenuSection: Menu, PopupMenuItem: MenuItem, PopupIconMenuItem: MenuItem, PopupSeparatorMenuItem: MenuItem,
             } },
@@ -109,12 +121,13 @@ function harness() {
     const source = fs.readFileSync('packaging/cinnamon/quotadeck@local/applet.js', 'utf8');
     vm.runInContext(source + '\nthis.AppletClass = QuotaDeckApplet;', context);
     const applet = new context.AppletClass({ uuid: 'quotadeck@local', path: '/applet' }, 0, 30, 37);
-    function respond(path, data, status = 200) {
+    function respond(path, data, status = 200, options = {}) {
         const index = requests.findIndex(request => request.message.url.endsWith(path));
         assert.notEqual(index, -1, 'request exists: ' + path);
         const request = requests.splice(index, 1)[0];
-        request.message.status_code = status;
-        request.callback(request.session, data instanceof Error ? data : JSON.stringify(data));
+        request.process.successful = options.successful !== false;
+        request.callback(request.process, data instanceof Error ? data
+            : [true, (options.raw ?? JSON.stringify(data)) + '\n' + status, options.stderr || '']);
     }
     function flush() {
         for (let iterations = 0; iterations < 100; iterations++) {
@@ -132,7 +145,8 @@ function harness() {
     const control = { mode: 'claude', claude: { activeAccountId: 'a' } };
     function ready() { respond('/state', state); respond('/control', control); flush(); }
     function poll() { applet._loadState(); ready(); }
-    return { applet, state, control, metrics, requests, sources, respond, flush, ready, poll };
+    return { applet, state, control, metrics, requests, sources, respond, flush, ready, poll,
+        failNextSpawn: error => { spawnError = error; } };
 }
 
 test('1000 background polls update values without rebuilding panel or closed menu actors', () => {
@@ -148,6 +162,7 @@ test('1000 background polls update values without rebuilding panel or closed men
     assert.equal(h.applet._quotaSection.items.length, 0);
     assert.deepEqual(h.metrics, before);
     assert.equal(h.sources.size, 1, 'only the periodic poll remains');
+    assert.equal(h.applet._requests.size, 0, 'completed subprocesses are released');
 });
 
 test('open menu reuses rows, shows fresh values on reopening and keeps one action handler', () => {
@@ -196,6 +211,7 @@ test('removal cancels timers and ignores late network completions without retryi
     h.applet.on_applet_removed_from_panel();
     const before = { ...h.metrics };
     assert.equal(request.cancellable.cancelled, true);
+    assert.equal(request.process.killed, true);
     h.respond('/state', new Error('cancelled'));
     h.applet._scheduleRender(); h.applet._scheduleRetry(); h.applet._loadState();
     h.applet.on_applet_removed_from_panel(); h.flush();
@@ -206,6 +222,7 @@ test('removal cancels timers and ignores late network completions without retryi
     assert.equal(h.applet.menu.signals.size, 0);
     assert.deepEqual(h.metrics, before);
     assert.equal(h.metrics.finalized, 1);
+    assert.equal(h.applet._requests.size, 0);
 });
 
 test('consumer exceptions are not mistaken for HTTP failures and delivered twice', () => {
@@ -234,7 +251,7 @@ test('temporary and sustained outages retain cached state and recover using the 
     assert.ok(h.applet._menuRows.some(row => row.item.label.text.includes('40%')));
 });
 
-test('a lost libsoup completion cannot stop the periodic polls', () => {
+test('a lost completion cannot stop the periodic polls', () => {
     const h = harness(); h.ready();
     // The service restarts mid-request: this completion is never delivered,
     // and no error reaches the applet — the poll cycle is the only recovery.
@@ -246,9 +263,52 @@ test('a lost libsoup completion cannot stop the periodic polls', () => {
     assert.equal(h.requests.length, 2, 'the next cycle must issue a fresh request');
     // A late delivery of the superseded request must not free the live slot.
     const lost = h.requests.shift();
-    lost.callback(lost.session, JSON.stringify(h.state));
+    lost.callback(lost.process, [true, JSON.stringify(h.state) + '\n200', '']);
     tick.callback();
     assert.equal(h.requests.length, 2, 'the reclaimed slot stays owned by the live request');
     h.respond('/state', h.state);
     h.flush();
+});
+
+test('HTTP uses bounded isolated subprocesses and passes headers as literal arguments', () => {
+    const h = harness(); h.ready();
+    const header = 'refresh; $(touch /not-executed)';
+    h.applet._request('POST', '/api/v1/refresh', { 'X-QuotaDeck-Request': header }, () => {});
+    const argv = [...h.requests[0].argv];
+    assert.equal(argv[0], 'curl');
+    assert.equal(argv[1], '--disable', 'ignore user curlrc settings');
+    assert.equal(argv[argv.indexOf('--noproxy') + 1], '*');
+    assert.equal(argv[argv.indexOf('--max-time') + 1], '12');
+    assert.equal(argv[argv.indexOf('--connect-timeout') + 1], '3');
+    assert.equal(argv[argv.indexOf('--header') + 1], 'X-QuotaDeck-Request: ' + header);
+    assert.equal(argv.at(-1), 'http://127.0.0.1:9211/api/v1/refresh');
+});
+
+test('child failure, HTTP errors and malformed JSON report once and release each request', () => {
+    const h = harness(); h.ready();
+    for (const response of [
+        { status: 503 }, { status: 302 }, { status: 200, raw: '{invalid' },
+        { status: 200, successful: false, stderr: 'curl: timeout' },
+    ]) {
+        let calls = 0;
+        h.applet._request('GET', '/test', null, (error, data) => {
+            calls++; assert.ok(error); assert.equal(data, null);
+        });
+        h.respond('/test', {}, response.status, response);
+        assert.equal(calls, 1);
+        assert.equal(h.applet._requests.size, 0);
+    }
+});
+
+test('a missing HTTP executable is reported and empty successful responses remain valid', () => {
+    const h = harness(); h.ready();
+    h.failNextSpawn(new Error('curl not found'));
+    let calls = 0;
+    h.applet._request('GET', '/test', null, error => { calls++; assert.match(error.message, /not found/); });
+    assert.equal(calls, 1);
+    assert.equal(h.applet._requests.size, 0);
+    h.applet._request('POST', '/test', null, (error, data) => {
+        assert.equal(error, null); assert.equal(Object.keys(data).length, 0);
+    });
+    h.respond('/test', null, 204, { raw: '' });
 });

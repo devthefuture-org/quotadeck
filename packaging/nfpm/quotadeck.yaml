@@ -11,6 +11,7 @@ depends:
   - libwebkit2gtk-4.1-0
   - libsoup-3.0-0
   - pipx
+  - curl
 contents:
   - src: ./dist/quotadeck
     dst: /usr/bin/quotadeck

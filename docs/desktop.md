@@ -28,6 +28,12 @@ make package-cinnamon
 
 Install the generated zip through Cinnamon's applet settings.
 
+The standalone applet requires `curl` (`sudo apt install curl` on Mint/Ubuntu;
+the Debian package installs it automatically). HTTP requests run asynchronously
+in short-lived processes with a 12-second deadline, so a native HTTP client
+failure cannot crash the Cinnamon process. Removing the applet cancels its
+pending requests and terminates the child processes.
+
 When switching from a manually installed zip to the Debian package, remove or rename the user copy in `~/.local/share/cinnamon/applets/quotadeck@local`; Cinnamon gives it priority over `/usr/share/cinnamon/applets/quotadeck@local`. QuotaDeck migrates legacy single-instance settings to the active numeric instance automatically when the packaged applet first loads.
 
 ## User service

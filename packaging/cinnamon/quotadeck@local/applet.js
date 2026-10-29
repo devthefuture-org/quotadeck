@@ -1,14 +1,10 @@
-imports.gi.versions.Soup = '3.0';
-
 const Applet = imports.ui.applet;
-const ByteArray = imports.byteArray;
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Mainloop = imports.mainloop;
 const PopupMenu = imports.ui.popupMenu;
 const Settings = imports.ui.settings;
-const Soup = imports.gi.Soup;
 const St = imports.gi.St;
 
 const API_ROOT = 'http://127.0.0.1:9211';
@@ -23,7 +19,7 @@ class QuotaDeckApplet extends Applet.Applet {
         super(orientation, panelHeight, instanceId);
 
         this._metadata = metadata;
-        this._session = new Soup.Session({ timeout: 12 });
+        this._requests = new Set();
         this._cancellable = new Gio.Cancellable();
         this._destroyed = false;
         this._renderSourceId = 0;
@@ -67,9 +63,8 @@ class QuotaDeckApplet extends Applet.Applet {
         this._renderLoading();
         this._loadState();
         this._timeoutId = Mainloop.timeout_add_seconds(POLL_SECONDS, () => {
-            // A libsoup completion can be lost without any error (the service
-            // restarting mid-request): after a full cycle the slot is stale,
-            // and the poll is the only thing that can take it back.
+            // Recover the slot if a completion was lost by the shell. HTTP
+            // requests have a shorter, independent process timeout.
             this._requestInFlight = false;
             this._loadState();
             return true;
@@ -133,7 +128,8 @@ class QuotaDeckApplet extends Applet.Applet {
         }
         this.menu.disconnect(this._menuStateChangedId);
         this._cancellable.cancel();
-        this._session.abort();
+        this._requests.forEach(process => process.force_exit());
+        this._requests.clear();
         this._settings.finalize();
         // Keep JS wrappers alive until their native actors have been destroyed.
         // Otherwise their destroy callbacks can run later, during CJS GC.
@@ -148,7 +144,7 @@ class QuotaDeckApplet extends Applet.Applet {
         if (this._destroyed || !this._displayStatus || this._renderSourceId) {
             return;
         }
-        // Render outside Soup callbacks and coalesce settings/network updates.
+        // Coalesce settings/network updates outside their completion callbacks.
         this._renderSourceId = Mainloop.idle_add(() => {
             this._renderSourceId = 0;
             if (this._destroyed) {
@@ -224,22 +220,45 @@ class QuotaDeckApplet extends Applet.Applet {
         if (this._destroyed) {
             return;
         }
-        const message = Soup.Message.new(method, API_ROOT + path);
+        // Keep native HTTP outside Cinnamon: libsoup 3.4 has crashed the entire
+        // shell while completing local responses. Each curl
+        // process owns its connection and deadline; failures become JS errors.
+        const argv = [
+            'curl', '--disable', '--silent', '--show-error', '--noproxy', '*',
+            '--connect-timeout', '3', '--max-time', '12',
+            '--write-out', '\n%{http_code}', '--request', method,
+        ];
         if (headers) {
-            Object.keys(headers).forEach(name => message.get_request_headers().append(name, headers[name]));
+            Object.keys(headers).forEach(name => argv.push('--header', name + ': ' + headers[name]));
         }
-        this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, this._cancellable, (session, result) => {
+        argv.push(API_ROOT + path);
+        let process;
+        try {
+            process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+        } catch (error) {
+            callback(error, null);
+            return;
+        }
+        this._requests.add(process);
+        process.communicate_utf8_async(null, this._cancellable, (process, result) => {
             let error = null;
             let data = null;
             try {
-                const bytes = session.send_and_read_finish(result);
-                if (message.status_code < 200 || message.status_code >= 300) {
-                    throw new Error('HTTP ' + message.status_code);
+                const [, stdout, stderr] = process.communicate_utf8_finish(result);
+                if (!process.get_successful()) {
+                    throw new Error((stderr || '').trim() || 'QuotaDeck HTTP request failed');
                 }
-                const raw = ByteArray.toString(bytes.get_data());
+                const boundary = stdout.lastIndexOf('\n');
+                const status = Number(stdout.slice(boundary + 1));
+                if (boundary < 0 || !Number.isInteger(status) || status < 200 || status >= 300) {
+                    throw new Error('HTTP ' + status);
+                }
+                const raw = stdout.slice(0, boundary);
                 data = raw ? JSON.parse(raw) : {};
             } catch (requestError) {
                 error = requestError;
+            } finally {
+                this._requests.delete(process);
             }
             if (!this._destroyed) {
                 // A consumer error is not a network error: never call it twice.
