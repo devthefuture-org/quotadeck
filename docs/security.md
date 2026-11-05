@@ -9,7 +9,7 @@ QuotaDeck is local-first and sends no telemetry.
 - Claude credentials remain managed by `cswap`; setup invokes only the official package installer plus public `list`/`add` commands, and plan selection invokes only `switch`. Codex credentials remain managed by Codex CLI.
 - Z.ai bearer credentials are attached only to validated HTTPS quota URLs.
 - Plan-control mutations are loopback-only, require an explicit anti-CSRF header, and never return stored keys.
-- Z.ai UI setup writes only the private QuotaDeck environment file and the documented Claude Code environment keys in `~/.claude/settings.json`; unrelated settings are preserved.
+- Z.ai and Kimi UI setup writes the private QuotaDeck environment file and the documented Claude Code environment keys in `~/.claude/settings.json`; unrelated settings are preserved. Kimi also saves the model preferences and credential helper it replaces in the private `settings.json.quotadeck-models.json` sidecar, so switching back can restore them. Kimi CLI OAuth credentials remain in the CLI store. The explicit `quotadeck credential kimi` command emits only the access token on stdout for Claude Code’s `apiKeyHelper`; it is not exposed through HTTP. Renewal uses only the configured official Kimi OAuth host, refuses redirects, serializes with Kimi Code’s lock, and saves rotated tokens with mode `0600`.
 - Persisted errors pass through redaction before storage.
 - Browser responses include a restrictive Content Security Policy and frame denial.
 

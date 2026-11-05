@@ -234,15 +234,15 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .plan-button:disabled, .selected-plan-button:disabled { cursor: default; opacity: .65; }
 .selected-plan-button:disabled { opacity: 1; }
 .control-empty { color: var(--muted); margin: 12px 0 0; }
-.zai-form { margin-top: 24px; }
-.zai-form label { display: block; margin-bottom: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
-.zai-form input { width: 100%; border: 1px solid var(--line); color: var(--ink); background: var(--input-bg); border-radius: 12px; padding: 12px 14px; }
-.zai-form input::placeholder { color: var(--muted); }
-.zai-form p { color: var(--muted); font-size: 10px; line-height: 1.55; }
-.zai-form code { color: var(--code-ink); overflow-wrap: anywhere; }
-.zai-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 15px; }
-.zai-actions button:disabled { opacity: .55; cursor: default; transform: none; }
-.zai-form a { color: var(--acid); font-size: 10px; text-underline-offset: 3px; }
+.plan-form { margin-top: 24px; }
+.plan-form label { display: block; margin-bottom: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+.plan-form input { width: 100%; border: 1px solid var(--line); color: var(--ink); background: var(--input-bg); border-radius: 12px; padding: 12px 14px; }
+.plan-form input::placeholder { color: var(--muted); }
+.plan-form p { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.plan-form code { color: var(--code-ink); overflow-wrap: anywhere; }
+.plan-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 15px; }
+.plan-actions button:disabled { opacity: .55; cursor: default; transform: none; }
+.plan-form a { color: var(--acid); font-size: 10px; text-underline-offset: 3px; }
 
 .diagnostic-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 28px 0 42px; }
 .diagnostic-summary div { border: 1px solid var(--line); border-radius: 16px; padding: 16px; min-width: 0; }

@@ -63,13 +63,18 @@ The same privacy rules as Z.ai apply: credentials stay in memory, are deduplicat
 The dashboard groups quota usage and plan selection in the same view. Compare consumption and reset times, then select:
 
 - **Use in Claude Code** on any enabled Claude subscription card managed by `cswap`;
-- **Use Z.ai in Claude Code** beside the Z.ai quotas to activate the configured GLM Coding Plan key.
+- **Use Z.ai in Claude Code** beside the Z.ai quotas to activate the configured GLM Coding Plan key;
+- **Use Kimi K3 in Claude Code** beside the Kimi quotas to activate the configured Kimi Code key and select `k3` for the main model, all model tiers, and sub-agents.
 
 The selected Claude account is highlighted, and the current plan remains visible above the quota filters. **Manage plans** opens the setup panel on the same page.
 
-Selecting a Claude subscription removes only an active Z.ai endpoint and token from Claude Code settings, preserves unrelated settings, and delegates credential activation to `cswap`. If `cswap` fails, QuotaDeck restores the original settings file.
+Selecting a Claude subscription removes the active Z.ai or Kimi routing from Claude Code settings, restores model preferences overridden by Kimi, preserves unrelated settings, and delegates credential activation to `cswap`. If `cswap` fails, QuotaDeck restores the original settings file.
 
 For Z.ai, open **Manage plans**, paste the API key once, then choose **Save & use Z.ai**. Later, use the button beside its quotas to select the stored key. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
+
+For Kimi, a local Kimi Code login is detected automatically from its `config.toml` and file-backed OAuth credentials. Choose **Use Kimi K3 in Claude Code** beside the quotas, or **Use Kimi K3** in **Manage plans**, without entering a key. QuotaDeck follows the configured mainland/global region and installs a Claude Code `apiKeyHelper` that reads and renews the local credential. The helper checks the store on each call; refreshes use the same directory lock as Kimi Code and atomically update its private credential file. OAuth tokens are never copied into Claude settings or the QuotaDeck environment file. If the login has been revoked, run `kimi login` again.
+
+API keys remain supported: paste one in **Manage plans**, or supply `KIMI_API_KEY` / `KIMI_CODING_API_KEY`. A configured API key takes precedence over the local OAuth login. The integration follows the [official Kimi Claude Code setup](https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html), using the requested `k3` model with a 256K context cap for compatibility across K3 subscription tiers. Switching between Kimi and Z.ai preserves their keys for later selection.
 
 The selection applies to new Claude Code processes. Existing sessions retain the environment with which they started.
 

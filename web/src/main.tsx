@@ -43,9 +43,10 @@ type Snapshot = {
 type AccountState = { account: Account; snapshot: Snapshot }
 type StateResponse = { generatedAt: string; providers: Provider[]; accounts: AccountState[] }
 type ControlState = {
-  mode: 'claude' | 'zai' | 'unknown'
+  mode: 'claude' | 'zai' | 'kimi' | 'unknown'
   claude: { available: boolean; activeAccountId?: string }
   zai: { configured: boolean; active: boolean; endpoint: string }
+  kimi: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
 }
 type DoctorReport = {
   version: string
@@ -58,6 +59,15 @@ type DoctorReport = {
 
 const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2, kimi: 3 }
 const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi' }
+type APIPlan = 'zai' | 'kimi'
+const apiPlans = {
+  zai: { label: 'Z.ai', glyph: 'Z', description: 'GLM Coding Plan for Claude Code', endpoint: 'https://api.z.ai/api/anthropic', keyURL: 'https://z.ai/manage-apikey/apikey-list' },
+  kimi: { label: 'Kimi', glyph: '☾', description: 'Kimi K3 for Claude Code', endpoint: 'https://api.kimi.com/coding/', keyURL: 'https://www.kimi.com/code/console' },
+}
+
+function isPlanSelected(control: ControlState | null, provider: APIPlan) {
+  return control?.mode === provider && (provider !== 'kimi' || control.kimi?.model === 'k3')
+}
 
 function App() {
   const { theme, selectTheme } = useTheme()
@@ -94,6 +104,7 @@ function App() {
   const selectedAccount = state?.accounts.find(item => item.account.id === control?.claude.activeAccountId)?.account
   const selectedPlan = !control ? 'Plan selection unavailable'
     : control.mode === 'zai' ? 'Z.ai · GLM Coding Plan'
+    : control.mode === 'kimi' ? `Kimi · ${control.kimi?.model === 'k3' ? 'K3' : control.kimi?.model || 'Coding Plan'}`
     : control.mode === 'claude' ? [selectedAccount?.label || 'Claude subscription', selectedAccount?.plan].filter(Boolean).join(' · ')
     : 'No plan selected'
 
@@ -235,18 +246,18 @@ function App() {
                   <div><p>{provider === 'claude' ? 'Claude Code' : providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
                 <div class="provider-content">
-                  {provider === 'zai' && <div class="provider-plan-action">
-                    <div><strong>GLM Coding Plan for Claude Code</strong><small>{control?.mode === 'zai' ? 'Selected for new sessions' : 'Use your configured Z.ai key for new sessions'}</small></div>
-                    <button class={control?.mode === 'zai' ? 'selected-plan-button' : 'plan-button'}
-                      disabled={!control || control.mode === 'zai' || plans.busy !== ''}
+                  {(provider === 'zai' || provider === 'kimi') && <div class="provider-plan-action">
+                    <div><strong>{apiPlans[provider].description}</strong><small>{isPlanSelected(control, provider) ? 'Selected for new sessions' : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' ? 'Use your local Kimi Code login for new sessions' : `Use your configured ${apiPlans[provider].label} key for new sessions`}</small></div>
+                    <button class={isPlanSelected(control, provider) ? 'selected-plan-button' : 'plan-button'}
+                      disabled={!control || isPlanSelected(control, provider) || plans.busy !== ''}
                       onClick={() => {
-                        if (control?.zai.configured) void plans.selectZAI()
+                        if (control?.[provider]?.configured) void plans.selectAPIPlan(provider)
                         else {
                           setSetupOpen(true)
-                          requestAnimationFrame(() => plans.apiKeyInput.current?.focus())
+                          requestAnimationFrame(() => plans.apiKeyInputs[provider].current?.focus())
                         }
                       }}>
-                      {plans.busy === 'zai-activate' ? 'Switching…' : control?.mode === 'zai' ? 'Selected in Claude Code' : control?.zai.configured ? 'Use Z.ai in Claude Code' : 'Set up Z.ai'}
+                      {plans.busy === `${provider}-activate` ? 'Switching…' : isPlanSelected(control, provider) ? 'Selected in Claude Code' : control?.[provider]?.configured ? `Use ${apiPlans[provider].label}${provider === 'kimi' ? ' K3' : ''} in Claude Code` : `Set up ${apiPlans[provider].label}`}
                     </button>
                   </div>}
                   <div class="card-grid">
@@ -275,7 +286,7 @@ function App() {
           {state && state.accounts.length === 0 && (
             <section class="empty-state">
               <span>◇</span><h3>No quota source detected yet</h3>
-              <p>Use Manage plans to set up Claude or Z.ai, or open diagnostics to inspect available quota sources.</p>
+              <p>Use Manage plans to set up Claude, Z.ai or Kimi, or open diagnostics to inspect available quota sources.</p>
               <button class="refresh-button" onClick={() => setView('diagnostics')}>Open diagnostics</button>
             </section>
           )}
@@ -332,11 +343,11 @@ function AccountCard({ state, mode, now, selected, planAction, onSignedIn }: { s
 }
 
 function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
-  const [apiKey, setAPIKey] = useState('')
+  const [apiKeys, setAPIKeys] = useState({ zai: '', kimi: '' })
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const apiKeyInput = useRef<HTMLInputElement>(null)
+  const apiKeyInputs = { zai: useRef<HTMLInputElement>(null), kimi: useRef<HTMLInputElement>(null) }
   const inFlight = useRef(false)
 
   async function request(path: string, method: string, body: unknown, busyKey: string, successMessage = 'Plan selection updated. New Claude Code sessions will use it.') {
@@ -353,7 +364,8 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
       })
       const payload = await response.json().catch(() => null) as { refresh?: string; control?: ControlState; error?: { message?: string } } | null
       if (!response.ok) throw new Error(payload?.error?.message || `HTTP ${response.status}`)
-      setAPIKey('')
+      if (busyKey.startsWith('zai-')) setAPIKeys(keys => ({ ...keys, zai: '' }))
+      if (busyKey.startsWith('kimi-')) setAPIKeys(keys => ({ ...keys, kimi: '' }))
       if (payload?.control) await onChanged(payload.control)
       setMessage(successMessage)
     } catch (requestError) {
@@ -396,20 +408,24 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
     }
   }
 
-  function configureZAI(activate: boolean) {
-    return request('/api/v1/control/zai', 'PUT', { apiKey, activate }, activate ? 'zai-activate' : 'zai-save',
-      activate ? 'Plan selection updated. New Claude Code sessions will use it.' : 'Z.ai API key saved.')
+  function setAPIKey(provider: APIPlan, value: string) {
+    setAPIKeys(keys => ({ ...keys, [provider]: value }))
   }
 
-  function selectZAI() {
-    return request('/api/v1/control/zai', 'PUT', { apiKey: '', activate: true }, 'zai-activate')
+  function configureAPIPlan(provider: APIPlan, activate: boolean) {
+    return request(`/api/v1/control/${provider}`, 'PUT', { apiKey: apiKeys[provider], activate }, `${provider}-${activate ? 'activate' : 'save'}`,
+      activate ? 'Plan selection updated. New Claude Code sessions will use it.' : `${apiPlans[provider].label} API key saved.`)
   }
 
-  return { apiKey, setAPIKey, apiKeyInput, busy, message, error, selectClaude, setupClaude, configureZAI, selectZAI }
+  function selectAPIPlan(provider: APIPlan) {
+    return request(`/api/v1/control/${provider}`, 'PUT', { apiKey: '', activate: true }, `${provider}-activate`)
+  }
+
+  return { apiKeys, setAPIKey, apiKeyInputs, busy, message, error, selectClaude, setupClaude, configureAPIPlan, selectAPIPlan }
 }
 
 function PlanSetup({ state, control, plans }: { state: StateResponse | null; control: ControlState | null; plans: ReturnType<typeof usePlanControl> }) {
-  const { apiKey, setAPIKey, apiKeyInput, busy, setupClaude, configureZAI } = plans
+  const { apiKeys, setAPIKey, apiKeyInputs, busy, setupClaude, configureAPIPlan } = plans
   const claudeAccounts = state?.accounts.filter(item => item.account.providerId === 'claude') ?? []
 
   return (
@@ -429,32 +445,33 @@ function PlanSetup({ state, control, plans }: { state: StateResponse | null; con
           </button>
         </div> : <p class="control-empty">{control ? 'Your accounts are ready. Choose Use in Claude Code on a quota card below.' : 'Plan controls are temporarily unavailable.'}</p>}
       </section>
-      <section class="plan-panel zai-panel">
+      {(['zai', 'kimi'] as const).map(provider => <section class="plan-panel" key={provider}>
         <div class="plan-heading">
-          <div><span class="provider-glyph zai">Z</span><div><p>Z.ai</p><small>GLM Coding Plan for Claude Code</small></div></div>
-          <span class={`availability ${control?.zai.configured ? 'ok' : ''}`}>{!control ? 'unavailable' : control.zai.configured ? 'key stored' : 'setup needed'}</span>
+          <div><span class={`provider-glyph ${provider}`}>{apiPlans[provider].glyph}</span><div><p>{apiPlans[provider].label}</p><small>{apiPlans[provider].description}</small></div></div>
+          <span class={`availability ${control?.[provider]?.configured ? 'ok' : ''}`}>{!control ? 'unavailable' : provider === 'kimi' && control.kimi?.source === 'kimi-cli' ? 'local login' : control[provider]?.configured ? 'key available' : 'setup needed'}</span>
         </div>
-        <div class="zai-form">
-          <label for="zai-api-key">Z.ai API key</label>
+        <div class="plan-form">
+          <label for={`${provider}-api-key`}>{apiPlans[provider].label} API key</label>
           <input
-            id="zai-api-key"
-            ref={apiKeyInput}
+            id={`${provider}-api-key`}
+            ref={apiKeyInputs[provider]}
             type="password"
-            value={apiKey}
+            value={apiKeys[provider]}
             autoComplete="new-password"
-            placeholder={control?.zai.configured ? 'Key already stored — leave blank to keep it' : 'Paste your Z.ai API key'}
-            onInput={event => setAPIKey(event.currentTarget.value)}
+            placeholder={provider === 'kimi' && control?.kimi?.localAvailable ? 'Optional — local Kimi Code login detected' : control?.[provider]?.configured ? 'Key already available — leave blank to keep it' : `Paste your ${apiPlans[provider].label} API key`}
+            onInput={event => setAPIKey(provider, event.currentTarget.value)}
           />
-          <p>The key stays in private local files and is never returned to this page. QuotaDeck configures the official Anthropic endpoint <code>{control?.zai.endpoint ?? 'https://api.z.ai/api/anthropic'}</code>.</p>
-          <div class="zai-actions">
-            <button class="quiet-button" disabled={!control || busy !== '' || apiKey.trim() === ''} onClick={() => void configureZAI(false)}>{busy === 'zai-save' ? 'Saving…' : 'Save key'}</button>
-            <button class="refresh-button" disabled={!control || busy !== '' || (!control?.zai.configured && apiKey.trim() === '') || (control?.mode === 'zai' && apiKey.trim() === '')} onClick={() => void configureZAI(true)}>
-              {busy === 'zai-activate' ? 'Configuring…' : control?.mode === 'zai' ? (apiKey.trim() === '' ? 'Selected' : 'Update active key') : 'Save & use Z.ai'}
+          <p>The key stays in private local files and is never returned to this page. QuotaDeck configures the official Anthropic-compatible endpoint <code>{control?.[provider]?.endpoint ?? apiPlans[provider].endpoint}</code>.</p>
+          {provider === 'kimi' && <p>{control?.kimi?.localAvailable ? 'Your local Kimi Code login is available. Leave the key blank to use it; QuotaDeck renews the connection automatically.' : 'Sign in with kimi login to use your local Kimi Code connection automatically, or enter a Kimi Code API key.'}</p>}
+          <div class="plan-actions">
+            <button class="quiet-button" disabled={!control || busy !== '' || apiKeys[provider].trim() === ''} onClick={() => void configureAPIPlan(provider, false)}>{busy === `${provider}-save` ? 'Saving…' : 'Save key'}</button>
+            <button class="refresh-button" disabled={!control || busy !== '' || (!control?.[provider]?.configured && apiKeys[provider].trim() === '') || (isPlanSelected(control, provider) && apiKeys[provider].trim() === '')} onClick={() => void configureAPIPlan(provider, true)}>
+              {busy === `${provider}-activate` ? 'Configuring…' : isPlanSelected(control, provider) ? (apiKeys[provider].trim() === '' ? 'Selected' : 'Update active key') : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' && apiKeys.kimi.trim() === '' ? 'Use Kimi K3' : `Save & use ${apiPlans[provider].label}${provider === 'kimi' ? ' K3' : ''}`}
             </button>
           </div>
-          <a href="https://z.ai/manage-apikey/apikey-list" target="_blank" rel="noreferrer">Open Z.ai API key management ↗</a>
+          <a href={apiPlans[provider].keyURL} target="_blank" rel="noreferrer">Open {apiPlans[provider].label} API key management ↗</a>
         </div>
-      </section>
+      </section>)}
     </section>
   )
 }

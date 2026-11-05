@@ -3,7 +3,6 @@ package doctor
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -179,6 +178,9 @@ func inspectClaudeSettings(path string) (string, bool, error) {
 	}
 	baseURL, _ := root.Env["ANTHROPIC_BASE_URL"].(string)
 	token, _ := root.Env["ANTHROPIC_AUTH_TOKEN"].(string)
+	if strings.TrimSpace(token) == "" && recognizedKimi(baseURL) {
+		token, _ = root.Env["ANTHROPIC_API_KEY"].(string)
+	}
 	return strings.TrimSpace(baseURL), strings.TrimSpace(token) != "", nil
 }
 
@@ -267,10 +269,5 @@ func (c Collector) kimiSources() []SourceCheck {
 }
 
 func recognizedKimi(baseURL string) bool {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	return host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com")
+	return kimi.RecognizedBaseURL(baseURL)
 }

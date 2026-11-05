@@ -394,6 +394,10 @@ class QuotaDeckApplet extends Applet.Applet {
         if (this._control.mode === 'zai') {
             return 'Z.ai · GLM Coding Plan';
         }
+        if (this._control.mode === 'kimi') {
+            const model = (this._control.kimi || {}).model;
+            return 'Kimi · ' + (model === 'k3' ? 'K3' : model || 'Coding Plan');
+        }
         if (this._control.mode === 'claude') {
             const activeId = ((this._control.claude || {}).activeAccountId);
             const selected = accounts.find(item => ((item || {}).account || {}).id === activeId);

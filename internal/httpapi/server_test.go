@@ -22,6 +22,8 @@ import (
 type fakeController struct {
 	switched string
 	apiKey   string
+	kimiKey  string
+	kimiErr  error
 	activate bool
 	setup    control.ClaudeSetupResult
 	setupErr error
@@ -61,6 +63,66 @@ func (f *fakeController) SetupClaude(context.Context) (control.ClaudeSetupResult
 func (f *fakeController) ConfigureZAI(_ context.Context, apiKey string, activate bool) error {
 	f.apiKey, f.activate = apiKey, activate
 	return nil
+}
+
+func (f *fakeController) ConfigureKimi(_ context.Context, apiKey string, activate bool) error {
+	f.kimiKey, f.activate = apiKey, activate
+	return f.kimiErr
+}
+
+func TestKimiControlGuardsErrorsAndRedaction(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	engine := poller.New(database, nil, time.Minute, time.Second, 30)
+	for _, test := range []struct {
+		name   string
+		remote string
+		guard  string
+		body   string
+		err    error
+		want   int
+	}{
+		{"no guard", "127.0.0.1:12345", "", `{}`, nil, http.StatusForbidden},
+		{"remote", "192.0.2.1:12345", "control", `{}`, nil, http.StatusForbidden},
+		{"invalid JSON", "127.0.0.1:12345", "control", `{`, nil, http.StatusBadRequest},
+		{"invalid key", "127.0.0.1:12345", "control", `{}`, control.ErrInvalidKimiKey, http.StatusBadRequest},
+		{"missing key", "127.0.0.1:12345", "control", `{}`, control.ErrKimiNotConfigured, http.StatusConflict},
+		{"activate", "127.0.0.1:12345", "control", `{"apiKey":"kimi-browser-fixture","activate":true}`, nil, http.StatusOK},
+		{"save only", "127.0.0.1:12345", "control", `{"apiKey":"kimi-browser-fixture","activate":false}`, nil, http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &fakeController{kimiErr: test.err}
+			server := New(engine, doctor.Collector{Config: config.Default()}, controller)
+			request := httptest.NewRequest(http.MethodPut, "/api/v1/control/kimi", bytes.NewBufferString(test.body))
+			request.RemoteAddr = test.remote
+			request.Header.Set("X-QuotaDeck-Request", test.guard)
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != test.want || bytes.Contains(recorder.Body.Bytes(), []byte("kimi-browser-fixture")) {
+				t.Fatalf("unexpected response: %d %s", recorder.Code, recorder.Body.String())
+			}
+			if test.want == http.StatusForbidden && controller.kimiKey != "" {
+				t.Fatal("forbidden request reached controller")
+			}
+			if test.want == http.StatusOK {
+				var response struct {
+					Control control.Status `json:"control"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if controller.kimiKey != "kimi-browser-fixture" || response.Control.Kimi.Active != controller.activate {
+					t.Fatal("incorrect Kimi activation")
+				}
+				if controller.activate && (response.Control.Mode != "kimi" || response.Control.Kimi.Model != "k3" || response.Control.ZAI.Active) {
+					t.Fatal("response did not select K3 exclusively")
+				}
+			}
+		})
+	}
 }
 
 func TestStateAndRefreshCSRFGuard(t *testing.T) {

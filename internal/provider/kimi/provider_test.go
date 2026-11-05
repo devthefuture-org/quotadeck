@@ -180,18 +180,32 @@ func TestDiscoveryDeduplicatesSameTokenAcrossSources(t *testing.T) {
 }
 
 func TestClaudeSettingsKimiBaseURLPromotesToken(t *testing.T) {
-	home := t.TempDir()
-	settingsPath := filepath.Join(home, "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(`{"env": {"ANTHROPIC_BASE_URL": "https://api.kimi.com", "ANTHROPIC_AUTH_TOKEN": "settings-kimi-token"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.KimiConfig{Enabled: true, HomePaths: []string{home}, SettingsPaths: []string{settingsPath}}
-	candidates, err := New(cfg).Discover(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(candidates) != 1 || candidates[0].Source != "claude-settings" {
-		t.Fatalf("Kimi Claude settings entry not discovered: %#v", candidates)
+	t.Setenv("KIMI_API_KEY", "")
+	t.Setenv("KIMI_CODING_API_KEY", "")
+	for _, endpoint := range []string{"https://api.kimi.com/coding/", "https://api.kimi.ai/coding/"} {
+		for _, keyName := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+			t.Run(endpoint+"/"+keyName, func(t *testing.T) {
+				home := t.TempDir()
+				settingsPath := filepath.Join(home, "settings.json")
+				body, _ := json.Marshal(map[string]any{"env": map[string]string{"ANTHROPIC_BASE_URL": endpoint, keyName: "settings-kimi-token"}})
+				if err := os.WriteFile(settingsPath, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cfg := config.KimiConfig{Enabled: true, HomePaths: []string{home}, SettingsPaths: []string{settingsPath}}
+				provider := New(cfg)
+				candidates, err := provider.Discover(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(candidates) != 1 || candidates[0].Source != "claude-settings" {
+					t.Fatalf("Kimi Claude settings entry not discovered: %#v", candidates)
+				}
+				credential := provider.secrets[candidates[0].Ref]
+				if token, err := credential.resolve(); err != nil || token != "settings-kimi-token" {
+					t.Fatal("discovered settings credential cannot be resolved")
+				}
+			})
+		}
 	}
 }
 

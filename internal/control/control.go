@@ -29,6 +29,8 @@ var (
 	ErrInvalidAccount        = errors.New("invalid Claude account")
 	ErrInvalidKey            = errors.New("invalid Z.ai API key")
 	ErrZAINotConfigured      = errors.New("Z.ai is not configured")
+	ErrInvalidKimiKey        = errors.New("invalid Kimi API key")
+	ErrKimiNotConfigured     = errors.New("Kimi is not configured")
 	ErrCswapInstallerMissing = errors.New("neither uv nor pipx is available to install cswap")
 	ErrCswapCustomBinary     = errors.New("automatic installation requires the default cswap binary name")
 	ErrClaudeLoginRequired   = errors.New("Claude Code must be logged in before cswap can add an account")
@@ -43,6 +45,7 @@ type Status struct {
 	Mode   string       `json:"mode"`
 	Claude ClaudeStatus `json:"claude"`
 	ZAI    ZAIStatus    `json:"zai"`
+	Kimi   KimiStatus   `json:"kimi"`
 }
 
 type ClaudeStatus struct {
@@ -62,10 +65,18 @@ type ZAIStatus struct {
 	Endpoint   string `json:"endpoint"`
 }
 
+type KimiStatus struct {
+	ZAIStatus
+	Model          string `json:"model,omitempty"`
+	Source         string `json:"source,omitempty"`
+	LocalAvailable bool   `json:"localAvailable"`
+}
+
 type Manager struct {
 	claudeBinary string
 	runner       runner.Runner
 	paths        Paths
+	kimiHomes    []string
 
 	mu sync.Mutex
 }
@@ -95,8 +106,15 @@ func New(claudeBinary string, commandRunner runner.Runner, paths Paths) *Manager
 	return &Manager{claudeBinary: claudeBinary, runner: commandRunner, paths: paths}
 }
 
+func (m *Manager) WithKimiHomes(homes []string) *Manager {
+	m.kimiHomes = append([]string(nil), homes...)
+	return m
+}
+
 func (m *Manager) Status(states []domain.AccountState) Status {
-	status := Status{Mode: "unknown", ZAI: ZAIStatus{Endpoint: zaiEndpoint}}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := Status{Mode: "unknown", ZAI: ZAIStatus{Endpoint: zaiEndpoint}, Kimi: KimiStatus{ZAIStatus: ZAIStatus{Endpoint: kimiEndpoint}}}
 	if _, err := m.runner.LookPath(m.claudeBinary); err == nil {
 		status.Claude.Available = true
 	}
@@ -121,6 +139,29 @@ func (m *Manager) Status(states []domain.AccountState) Status {
 	if active {
 		status.Mode = "zai"
 	}
+	status.Kimi.Active, settingsKey = kimiSettings(settings)
+	status.Kimi.Configured = m.kimiKey(settingsKey) != ""
+	if status.Kimi.Configured {
+		status.Kimi.Source = "api-key"
+	}
+	if credential, ok := m.localKimi(); ok {
+		status.Kimi.LocalAvailable = true
+		if !status.Kimi.Configured {
+			status.Kimi.Configured = true
+			status.Kimi.Source = "kimi-cli"
+			status.Kimi.Endpoint = credential.Endpoint()
+		}
+	}
+	if kimiHelperActive(settings) {
+		status.Kimi.Active = true
+		status.Kimi.Source = "kimi-cli"
+	}
+	if status.Kimi.Active {
+		status.Mode = "kimi"
+		environment, _ := settings["env"].(map[string]any)
+		status.Kimi.Model, _ = environment["ANTHROPIC_MODEL"].(string)
+		status.Kimi.Endpoint, _ = environment["ANTHROPIC_BASE_URL"].(string)
+	}
 	return status
 }
 
@@ -143,17 +184,17 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 	if err != nil {
 		return fmt.Errorf("parse Claude settings: %w", err)
 	}
-	activeZAI, settingsKey := zaiSettings(settings)
-	if activeZAI && readEnvironmentValue(m.paths.Environment, "ZAI_API_KEY") == "" && settingsKey != "" {
-		if err := writeEnvironmentValue(m.paths.Environment, "ZAI_API_KEY", settingsKey); err != nil {
-			return fmt.Errorf("preserve Z.ai configuration: %w", err)
-		}
-		_ = os.Setenv("ZAI_API_KEY", settingsKey)
+	if err := m.preservePlanKeys(settings); err != nil {
+		return err
 	}
-	changed := disableZAI(settings)
+	changed, err := m.disableKimi(settings)
+	if err != nil {
+		return err
+	}
+	changed = disableZAI(settings) || changed
 	if changed {
 		if err := writeSettings(m.paths.ClaudeSettings, settings, snapshot.mode); err != nil {
-			return fmt.Errorf("disable Z.ai for Claude Code: %w", err)
+			return fmt.Errorf("disable API plan for Claude Code: %w", err)
 		}
 	}
 	if _, err := m.runner.Run(ctx, m.claudeBinary, "switch", strconv.Itoa(slot), "--json"); err != nil {
@@ -260,16 +301,23 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 		}
 	}
 
-	effectiveKey := firstNonEmpty(apiKey, readEnvironmentValue(m.paths.Environment, "ZAI_API_KEY"), os.Getenv("ZAI_API_KEY"))
+	settings, err := readSettings(m.paths.ClaudeSettings)
+	if err != nil {
+		return fmt.Errorf("read Claude settings: %w", err)
+	}
+	_, settingsKey := zaiSettings(settings)
+	effectiveKey := firstNonEmpty(apiKey, readEnvironmentValue(m.paths.Environment, "ZAI_API_KEY"), os.Getenv("ZAI_API_KEY"), settingsKey)
 	if effectiveKey == "" {
 		return ErrZAINotConfigured
 	}
 	if !activate {
 		return nil
 	}
-	settings, err := readSettings(m.paths.ClaudeSettings)
-	if err != nil {
-		return fmt.Errorf("read Claude settings: %w", err)
+	if err := m.preservePlanKeys(settings); err != nil {
+		return err
+	}
+	if _, err := m.disableKimi(settings); err != nil {
+		return err
 	}
 	if err := enableZAI(settings, effectiveKey); err != nil {
 		return fmt.Errorf("update Claude settings: %w", err)
@@ -369,6 +417,7 @@ func enableZAI(settings map[string]any, apiKey string) error {
 		return err
 	}
 	environment["ANTHROPIC_AUTH_TOKEN"] = apiKey
+	delete(environment, "ANTHROPIC_API_KEY")
 	environment["ANTHROPIC_BASE_URL"] = zaiEndpoint
 	environment["API_TIMEOUT_MS"] = managedTimeout
 	return nil

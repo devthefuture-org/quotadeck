@@ -49,7 +49,7 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 		cfg.Providers.Claude.Binary,
 		runner.ExecRunner{},
 		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
-	)
+	).WithKimiHomes(cfg.Providers.Kimi.HomePaths)
 	api := httpapi.New(engine, collector, controller)
 	runtime := &Runtime{database: database, engine: engine}
 	if codexProvider != nil {

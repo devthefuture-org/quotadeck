@@ -61,6 +61,15 @@ test('stale and expired windows do not claim an active block', () => {
     assert.equal(applet._isSelectedClaude(item), false);
 });
 
+test('Kimi K3 is identified as the selected Claude Code plan', () => {
+    const { applet, item } = fixture();
+    applet._control = { mode: 'kimi', kimi: { active: true, model: 'k3' } };
+    assert.equal(applet._selectedPlanLabel([item]), 'Kimi · K3');
+    assert.equal(applet._isSelectedClaude(item), false);
+    applet._control.kimi = {};
+    assert.equal(applet._selectedPlanLabel([item]), 'Kimi · Coding Plan');
+});
+
 test('expired reset times are not presented as future countdowns', () => {
     const { applet } = fixture();
     assert.equal(applet._formatReset(new Date(Date.now() - 10 * 3600000).toISOString()),

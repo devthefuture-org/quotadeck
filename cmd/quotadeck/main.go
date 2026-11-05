@@ -18,6 +18,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
+	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 	"github.com/devthefuture-org/quotadeck/internal/service"
 )
@@ -46,6 +47,8 @@ func run(args []string) error {
 		return apiCommand(args[1:], true)
 	case "setup":
 		return setupCommand(args[1:])
+	case "credential":
+		return credentialCommand(args[1:])
 	case "service":
 		return serviceCommand(args[1:])
 	case "version", "--version", "-v":
@@ -57,6 +60,32 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+// The credential is emitted only on this explicit helper command's stdout,
+// consumed directly by Claude Code. Never include it in diagnostics or HTTP.
+func credentialCommand(args []string) error {
+	if len(args) == 0 || args[0] != "kimi" {
+		return errors.New("credential requires kimi")
+	}
+	flags := flag.NewFlagSet("credential kimi", flag.ContinueOnError)
+	home := flags.String("home", "~/.kimi-code", "Kimi Code home")
+	name := flags.String("name", "", "configured credential reference")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	for _, credential := range kimi.LocalCredentials([]string{*home}) {
+		if *name != "" && credential.Name != *name {
+			continue
+		}
+		token, err := credential.Token(context.Background())
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, token)
+		return err
+	}
+	return kimi.ErrLoginRequired
 }
 
 func setupCommand(args []string) error {

@@ -48,9 +48,17 @@ type secret struct {
 	Kind    string // "env", "settings", or "cli"
 	EnvKey  string
 	Path    string
+	Local   *LocalCredential
 }
 
 func (s secret) resolve() (string, error) {
+	return s.resolveContext(context.Background())
+}
+
+func (s secret) resolveContext(ctx context.Context) (string, error) {
+	if s.Local != nil {
+		return s.Local.Token(ctx)
+	}
 	switch s.Kind {
 	case "env":
 		if token := strings.TrimSpace(os.Getenv(s.EnvKey)); token != "" {
@@ -162,8 +170,15 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 	if len(homePaths) == 0 {
 		homePaths = []string{"~/.kimi-code"}
 	}
+	locals := map[string]LocalCredential{}
+	for _, credential := range LocalCredentials(homePaths) {
+		locals[credential.Path()] = credential
+	}
 	for _, rawHome := range homePaths {
-		home := config.ExpandPath(rawHome)
+		home, err := filepath.Abs(config.ExpandPath(rawHome))
+		if err != nil {
+			continue
+		}
 		credentialFiles, err := filepath.Glob(filepath.Join(home, "credentials", "*.json"))
 		if err != nil || len(credentialFiles) == 0 {
 			continue
@@ -174,11 +189,16 @@ func (p *Provider) Discover(_ context.Context) ([]domain.AccountCandidate, error
 				continue
 			}
 			ref := "file:" + filepath.Clean(credentialPath)
+			credentials := secret{Token: token, BaseURL: baseURLFor(p.config, ""), Kind: "cli", Path: credentialPath}
+			if local, ok := locals[credentialPath]; ok {
+				credentials.BaseURL = local.BaseURL
+				credentials.Local = &local
+			}
 			items = append(items, discovered{
 				candidate: candidate(ref, "Kimi Code CLI", "kimi-cli", map[string]string{
 					"path": home, "secretPresent": "true",
 				}),
-				secret: secret{Token: token, BaseURL: baseURLFor(p.config, ""), Kind: "cli", Path: credentialPath},
+				secret: credentials,
 			})
 		}
 	}
@@ -216,7 +236,7 @@ func (p *Provider) Fetch(ctx context.Context, account domain.AccountCandidate) (
 	if !ok {
 		return domain.Account{}, domain.Snapshot{}, &domain.CodedError{Code: "credential_missing", Err: errors.New("Kimi credential is not available")}
 	}
-	token, err := credentials.resolve()
+	token, err := credentials.resolveContext(ctx)
 	if err != nil || token == "" {
 		return domain.Account{}, domain.Snapshot{}, &domain.CodedError{Code: "credential_missing", Err: err}
 	}
@@ -508,20 +528,29 @@ func readClaudeSettings(path string) (claudeSettings, error) {
 		return claudeSettings{}, err
 	}
 	return claudeSettings{
-		Token:   stringValue(root.Env["ANTHROPIC_AUTH_TOKEN"]),
+		Token:   claudeSettingsToken(root.Env),
 		BaseURL: stringValue(root.Env["ANTHROPIC_BASE_URL"]),
 	}, nil
 }
 
-// recognizedBaseURL accepts only Kimi endpoints, so an unrelated
+func claudeSettingsToken(environment map[string]any) string {
+	if token := stringValue(environment["ANTHROPIC_AUTH_TOKEN"]); token != "" {
+		return token
+	}
+	return stringValue(environment["ANTHROPIC_API_KEY"])
+}
+
+func recognizedBaseURL(raw string) bool { return RecognizedBaseURL(raw) }
+
+// RecognizedBaseURL accepts only Kimi endpoints, so an unrelated
 // ANTHROPIC_AUTH_TOKEN sitting next to another proxy is never promoted.
-func recognizedBaseURL(raw string) bool {
-	parsed, err := url.Parse(raw)
+func RecognizedBaseURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme != "https" {
 		return false
 	}
 	host := strings.ToLower(parsed.Hostname())
-	return host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com")
+	return host == "api.kimi.com" || strings.HasSuffix(host, ".kimi.com") || host == "api.kimi.ai" || strings.HasSuffix(host, ".kimi.ai")
 }
 
 // codingBaseURL derives the coding API base from an Anthropic-compatible Kimi

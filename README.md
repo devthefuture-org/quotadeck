@@ -30,7 +30,7 @@ A Codex account whose session has expired offers **Reconnect** on its own card, 
 
 Choose **System**, **Light**, or **Dark** in the dashboard header. The theme preference is saved locally; **System** follows changes to your device's appearance automatically.
 
-The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan can be activated alongside its quotas. **Manage plans** opens setup for both providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
+The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan and Kimi K3 can be activated alongside their quotas. Kimi can reuse the local Kimi Code login and renew it automatically, without a separate API key. **Manage plans** opens setup for all three providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
 
 ## Install
 
@@ -113,6 +113,7 @@ GET  /api/v1/control
 POST /api/v1/refresh
 POST /api/v1/control/claude/switch
 PUT  /api/v1/control/zai
+PUT  /api/v1/control/kimi
 ```
 
 Manual refresh and plan changes are loopback-only and require QuotaDeck's explicit request header. Errors are redacted before persistence; temporary failures keep the last valid windows visible as stale. Control responses expose only secret-presence booleans, never key values.

@@ -92,8 +92,11 @@ providers:
 
 Open **Manage plans** on the dashboard for the same setup without editing files manually:
 
-- **Save key** updates `ZAI_API_KEY` in the private QuotaDeck environment file;
+- **Save key** updates `ZAI_API_KEY` or `KIMI_API_KEY` in the private QuotaDeck environment file;
 - **Save & use Z.ai** also configures `~/.claude/settings.json` for the official Z.ai Anthropic endpoint;
-- choosing **Use in Claude Code** on a quota card removes the active Z.ai routing keys and runs `cswap switch` for the selected slot.
+- **Save & use Kimi K3** configures the Kimi Code endpoint and selects `k3` for all Claude Code model tiers; an existing file-backed Kimi Code login is used automatically when no API key is configured;
+- choosing **Use in Claude Code** on a Claude quota card removes the active Z.ai or Kimi routing keys and runs `cswap switch` for the selected slot.
+
+For local Kimi Code authentication, the helper follows the OAuth reference and region in `~/.kimi-code/config.toml` (or `providers.kimi.homePaths`). It renews expiring tokens in the CLI credential store, so Kimi Code does not need to remain open. Claude Code caches helper results for one minute. Selecting Claude or Z.ai restores the previous credential helper.
 
 QuotaDeck never includes a stored key in API responses, diagnostics, logs, or SQLite. Leaving the key field blank keeps the already stored value.

@@ -19,6 +19,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/poller"
 	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
+	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
 )
 
 //go:embed ui
@@ -38,6 +39,7 @@ type Controller interface {
 	SetupClaude(ctx context.Context) (control.ClaudeSetupResult, error)
 	SwitchClaude(ctx context.Context, accountID string) error
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
+	ConfigureKimi(ctx context.Context, apiKey string, activate bool) error
 }
 
 // CodexLogins runs Codex sign-in sessions. They outlive the request that starts
@@ -82,6 +84,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/control/claude/setup", s.setupClaude)
 	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
 	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
+	mux.HandleFunc("PUT /api/v1/control/kimi", s.configureKimi)
 	mux.HandleFunc("POST /api/v1/control/codex/login", s.startCodexLogin)
 	mux.HandleFunc("GET /api/v1/control/codex/login", s.codexLoginStatus)
 	mux.HandleFunc("DELETE /api/v1/control/codex/login/{loginId}", s.cancelCodexLogin)
@@ -254,6 +257,7 @@ func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request)
 		status.Mode = "claude"
 		status.Claude.ActiveAccountID = input.AccountID
 		status.ZAI.Active = false
+		status.Kimi.Active = false
 	})
 }
 
@@ -317,6 +321,42 @@ func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request)
 		if input.Activate {
 			status.Mode = "zai"
 			status.ZAI.Active = true
+			status.Kimi.Active = false
+		}
+	})
+}
+
+func (s *Server) configureKimi(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		APIKey   string `json:"apiKey"`
+		Activate bool   `json:"activate"`
+	}
+	if err := decodeJSON(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain a valid Kimi configuration")
+		return
+	}
+	if err := s.controller.ConfigureKimi(request.Context(), input.APIKey, input.Activate); err != nil {
+		switch {
+		case errors.Is(err, control.ErrInvalidKimiKey):
+			writeError(writer, http.StatusBadRequest, "invalid_api_key", "the Kimi API key format is invalid")
+		case errors.Is(err, control.ErrKimiNotConfigured):
+			writeError(writer, http.StatusConflict, "kimi_not_configured", "sign in with kimi login or enter a Kimi Code API key before selecting the plan")
+		case errors.Is(err, kimi.ErrLoginRequired):
+			writeError(writer, http.StatusConflict, "kimi_login_required", "run kimi login to renew your local Kimi Code connection, then retry")
+		default:
+			writeError(writer, http.StatusInternalServerError, "configuration_failed", "the Kimi configuration could not be saved")
+		}
+		return
+	}
+	s.writeControlResult(writer, request, "kimi", func(status *control.Status) {
+		if input.Activate {
+			status.Mode = "kimi"
+			status.Kimi.Active = true
+			status.Kimi.Model = "k3"
+			status.ZAI.Active = false
 		}
 	})
 }
