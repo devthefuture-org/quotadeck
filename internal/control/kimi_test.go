@@ -117,6 +117,9 @@ func TestKimiSaveActivateAndReturnToClaude(t *testing.T) {
 			t.Fatalf("%s must select K3", name)
 		}
 	}
+	if env["CLAUDE_CODE_AUTO_MODE_SERVER"] != "0" || env["CLAUDE_CODE_AUTO_MODE_MODEL"] != "k3" {
+		t.Fatalf("auto mode classifier was not pinned to the Kimi endpoint: %#v", env)
+	}
 	status := manager.Status(nil)
 	encoded, _ := json.Marshal(status)
 	if status.Mode != "kimi" || !status.Kimi.Active || !status.Kimi.Configured || status.Kimi.Model != "k3" || strings.Contains(string(encoded), secret) {

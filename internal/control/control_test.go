@@ -95,6 +95,9 @@ func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {
 	if !active || key != secret {
 		t.Fatalf("Z.ai settings were not activated")
 	}
+	if environment, _ := settings["env"].(map[string]any); environment[autoModeServerSwitch] != "0" {
+		t.Fatalf("Z.ai activation must keep auto mode on Claude Code's own classifier: %#v", environment)
+	}
 	status := manager.Status(nil)
 	body, err := json.Marshal(status)
 	if err != nil {
@@ -116,6 +119,7 @@ func TestSwitchClaudeDisablesZAIAndRunsExactSlot(t *testing.T) {
 		"ANTHROPIC_AUTH_TOKEN": "existing-zai-key",
 		"ANTHROPIC_BASE_URL":   zaiEndpoint,
 		"API_TIMEOUT_MS":       managedTimeout,
+		autoModeServerSwitch:   "0",
 		"KEEP_ME":              "yes",
 	}}
 	if err := writeSettings(paths.ClaudeSettings, settings, 0o600); err != nil {
@@ -132,7 +136,7 @@ func TestSwitchClaudeDisablesZAIAndRunsExactSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := updated["env"].(map[string]any)
-	if environment["KEEP_ME"] != "yes" || environment["ANTHROPIC_AUTH_TOKEN"] != nil || environment["ANTHROPIC_BASE_URL"] != nil {
+	if environment["KEEP_ME"] != "yes" || environment["ANTHROPIC_AUTH_TOKEN"] != nil || environment["ANTHROPIC_BASE_URL"] != nil || environment[autoModeServerSwitch] != nil {
 		t.Fatalf("unexpected settings: %#v", updated)
 	}
 	if key := readEnvironmentValue(paths.Environment, "ZAI_API_KEY"); key != "existing-zai-key" {

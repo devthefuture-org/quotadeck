@@ -15,6 +15,8 @@ const kimiEndpoint = "https://api.kimi.com/coding/"
 // Route every Claude Code model tier to K3. The 256K cap also works with
 // membership tiers whose K3 requests do not support the full 1M context.
 // https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html
+// Auto mode's gateway classifier also runs on K3: the Kimi endpoint returns
+// no verdict for the server-side review (see autoModeServerSwitch).
 var kimiEnvironment = map[string]string{
 	"ANTHROPIC_MODEL":                   "k3",
 	"ANTHROPIC_SMALL_FAST_MODEL":        "k3",
@@ -23,6 +25,8 @@ var kimiEnvironment = map[string]string{
 	"ANTHROPIC_DEFAULT_SONNET_MODEL":    "k3",
 	"ANTHROPIC_DEFAULT_HAIKU_MODEL":     "k3",
 	"CLAUDE_CODE_SUBAGENT_MODEL":        "k3",
+	"CLAUDE_CODE_AUTO_MODE_SERVER":      "0",
+	"CLAUDE_CODE_AUTO_MODE_MODEL":       "k3",
 	"CLAUDE_CODE_EFFORT_LEVEL":          "high",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW":   "262144",
 	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":    "262144",

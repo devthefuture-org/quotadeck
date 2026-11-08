@@ -25,6 +25,13 @@ const (
 	managedTimeout = "3000000"
 )
 
+// Claude Code's auto mode asks the API to review each action server-side.
+// Anthropic-compatible gateways answer those requests without a verdict, and
+// Claude Code retired its local fallback classifier in 2.1.31x, so auto mode
+// denies every action it would check behind a gateway. "0" keeps Claude
+// Code's own classifier requests, which gateways serve like any other call.
+const autoModeServerSwitch = "CLAUDE_CODE_AUTO_MODE_SERVER"
+
 var (
 	ErrInvalidAccount        = errors.New("invalid Claude account")
 	ErrInvalidKey            = errors.New("invalid Z.ai API key")
@@ -420,6 +427,7 @@ func enableZAI(settings map[string]any, apiKey string) error {
 	delete(environment, "ANTHROPIC_API_KEY")
 	environment["ANTHROPIC_BASE_URL"] = zaiEndpoint
 	environment["API_TIMEOUT_MS"] = managedTimeout
+	environment[autoModeServerSwitch] = "0"
 	return nil
 }
 
@@ -436,6 +444,9 @@ func disableZAI(settings map[string]any) bool {
 	delete(environment, "ANTHROPIC_BASE_URL")
 	if timeout, _ := environment["API_TIMEOUT_MS"].(string); timeout == managedTimeout {
 		delete(environment, "API_TIMEOUT_MS")
+	}
+	if value, _ := environment[autoModeServerSwitch].(string); value == "0" {
+		delete(environment, autoModeServerSwitch)
 	}
 	if len(environment) == 0 {
 		delete(settings, "env")
