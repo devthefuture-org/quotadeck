@@ -22,3 +22,18 @@ QuotaDeck does not attempt to isolate data from another process already running 
 Do not open a public issue for a suspected vulnerability. Use [GitHub's private security advisory form](https://github.com/devthefuture-org/quotadeck/security/advisories/new) with reproduction steps, impact, and the affected version.
 
 See the repository [security policy](https://github.com/devthefuture-org/quotadeck/blob/main/SECURITY.md) for supported versions and response expectations.
+
+## OpenCode v2 credentials
+
+OpenCode Console credentials stay in OpenCode's SQLite `credential` table.
+QuotaDeck persists only a source reference and quota metadata in its own database.
+The Claude Code settings store the helper command and workspace ID, never the
+OAuth access or refresh token. Only the explicit credential helper emits the
+access token on stdout for Claude Code to consume.
+
+Discovery and normal reads open SQLite in read-only mode. OAuth renewal contacts
+only `https://opencode.ai/console/auth/device/token`, refuses redirects and
+updates the original row with a compare-and-swap after acquiring OpenCode's
+`credential-refresh:<id>` directory lock in its XDG state directory. Unknown
+credential fields are preserved. Logout or replacement during renewal prevents
+the update. Remote error bodies are never exposed in diagnostics or HTTP.

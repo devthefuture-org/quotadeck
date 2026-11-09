@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,13 +22,15 @@ import (
 )
 
 type fakeController struct {
-	switched string
-	apiKey   string
-	kimiKey  string
-	kimiErr  error
-	activate bool
-	setup    control.ClaudeSetupResult
-	setupErr error
+	openCodeErr       error
+	openCodeActivated bool
+	switched          string
+	apiKey            string
+	kimiKey           string
+	kimiErr           error
+	activate          bool
+	setup             control.ClaudeSetupResult
+	setupErr          error
 }
 
 type slowUnrelatedProvider struct{}
@@ -488,5 +492,49 @@ func TestCodexLoginUnavailableWithoutAManager(t *testing.T) {
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 without a login manager, got %d", recorder.Code)
+	}
+}
+
+func (f *fakeController) ConfigureOpenCode(context.Context) error {
+	f.openCodeActivated = true
+	return f.openCodeErr
+}
+
+func TestOpenCodeActivationGuardsAndRedacts(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	engine := poller.New(database, nil, time.Minute, time.Second, 30)
+	for _, test := range []struct {
+		name, guard, body string
+		failure           error
+		want              int
+	}{
+		{"guard", "", `{"activate":true}`, nil, 403},
+		{"inactive", "control", `{"activate":false}`, nil, 400},
+		{"invalid", "control", `{"activate":true,"apiKey":"unexpected-secret"}`, nil, 400},
+		{"failure", "control", `{"activate":true}`, fmt.Errorf("unexpected-secret"), 500},
+		{"success", "control", `{"activate":true}`, nil, 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &fakeController{openCodeErr: test.failure}
+			s := New(engine, doctor.Collector{}, c)
+			request := httptest.NewRequest(http.MethodPut, "/api/v1/control/opencode", strings.NewReader(test.body))
+			request.RemoteAddr = "127.0.0.1:4321"
+			request.Header.Set("X-QuotaDeck-Request", test.guard)
+			response := httptest.NewRecorder()
+			s.Handler().ServeHTTP(response, request)
+			if response.Code != test.want || strings.Contains(response.Body.String(), "unexpected-secret") {
+				t.Fatalf("response: %d %s", response.Code, response.Body.String())
+			}
+			if test.want == 200 && !strings.Contains(response.Body.String(), `"mode":"opencode"`) {
+				t.Fatal("wrong selected plan")
+			}
+			if test.want < 500 && test.want != 200 && c.openCodeActivated {
+				t.Fatal("invalid request reached control")
+			}
+		})
 	}
 }

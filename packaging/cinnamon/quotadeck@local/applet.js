@@ -12,7 +12,7 @@ const POLL_SECONDS = 60;
 const RETRY_SECONDS = 5;
 const OFFLINE_FAILURE_THRESHOLD = 3;
 const SERVICE_START_COOLDOWN_SECONDS = 30;
-const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi' };
+const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi', opencode: 'OpenCode Go' };
 
 class QuotaDeckApplet extends Applet.Applet {
     constructor(metadata, orientation, panelHeight, instanceId) {
@@ -394,6 +394,7 @@ class QuotaDeckApplet extends Applet.Applet {
         if (this._control.mode === 'zai') {
             return 'Z.ai · GLM Coding Plan';
         }
+        if (this._control.mode === 'opencode') return 'OpenCode Go · DeepSeek V4.1 Flash';
         if (this._control.mode === 'kimi') {
             const model = (this._control.kimi || {}).model;
             return 'Kimi · ' + (model === 'k3' ? 'K3' : model || 'Coding Plan');
@@ -451,7 +452,7 @@ class QuotaDeckApplet extends Applet.Applet {
     }
 
     _updateIndicatorActor(box, provider, text, level, indicator = null) {
-        const supported = ['claude', 'codex', 'zai', 'kimi'];
+        const supported = ['claude', 'codex', 'zai', 'kimi', 'opencode'];
         const blocked = indicator && this._blockedWindow(indicator.item);
         const filename = blocked ? 'icon-claude-blocked.svg' : supported.includes(provider)
             ? 'icon-' + provider + '.svg'

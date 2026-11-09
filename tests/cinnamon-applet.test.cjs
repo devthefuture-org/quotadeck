@@ -102,3 +102,12 @@ test('non-selected Claude account still shows its 5h ring on a weekly indicator'
     item.account.providerId = 'codex';
     assert.equal(applet._blockedWindow(item), null);
 });
+
+
+test('OpenCode Go displays the Claude Code model and provider icon', () => {
+    const { applet } = fixture();
+    applet._control = { mode: 'opencode', opencode: { active: true, model: 'deepseek-v4.1-flash' } };
+    assert.equal(applet._selectedPlanLabel([]), 'OpenCode Go · DeepSeek V4.1 Flash');
+    const actor = applet._indicatorActor('opencode', '25%', 'normal');
+    assert.equal(actor.children[0].gicon.file, '/applet/icon-opencode.svg');
+});

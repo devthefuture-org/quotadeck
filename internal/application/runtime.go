@@ -15,6 +15,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/provider/claudecswap"
 	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
 	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
+	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 	"github.com/devthefuture-org/quotadeck/internal/provider/zai"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 	"github.com/devthefuture-org/quotadeck/internal/store"
@@ -49,7 +50,7 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 		cfg.Providers.Claude.Binary,
 		runner.ExecRunner{},
 		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
-	).WithKimiHomes(cfg.Providers.Kimi.HomePaths)
+	).WithKimiHomes(cfg.Providers.Kimi.HomePaths).WithOpenCode(cfg.Providers.OpenCode)
 	api := httpapi.New(engine, collector, controller)
 	runtime := &Runtime{database: database, engine: engine}
 	if codexProvider != nil {
@@ -114,6 +115,9 @@ func buildProviders(cfg config.Config) ([]domain.Provider, *codex.Provider) {
 	}
 	if cfg.Providers.Kimi.Enabled {
 		providers = append(providers, kimi.New(cfg.Providers.Kimi))
+	}
+	if cfg.Providers.OpenCode.Enabled {
+		providers = append(providers, opencode.New(cfg.Providers.OpenCode))
 	}
 	return providers, codexProvider
 }

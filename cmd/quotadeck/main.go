@@ -19,6 +19,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
 	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
+	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 	"github.com/devthefuture-org/quotadeck/internal/service"
 )
@@ -65,8 +66,34 @@ func run(args []string) error {
 // The credential is emitted only on this explicit helper command's stdout,
 // consumed directly by Claude Code. Never include it in diagnostics or HTTP.
 func credentialCommand(args []string) error {
+	if len(args) > 0 && args[0] == "opencode" {
+		flags := flag.NewFlagSet("credential opencode", flag.ContinueOnError)
+		database := flags.String("database", "", "OpenCode v2 database")
+		state := flags.String("state", "", "OpenCode state directory")
+		id := flags.String("id", "", "OpenCode credential reference")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		credentials, err := opencode.LocalCredentials(context.Background(), config.OpenCodeConfig{DatabasePath: *database, StatePath: *state})
+		if err != nil {
+			return err
+		}
+		for _, c := range credentials {
+			if *id != "" && c.ID != *id {
+				continue
+			}
+			token, err := c.Token(context.Background())
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(os.Stdout, token)
+			return err
+		}
+		return opencode.ErrLoginRequired
+	}
+
 	if len(args) == 0 || args[0] != "kimi" {
-		return errors.New("credential requires kimi")
+		return errors.New("credential requires kimi or opencode")
 	}
 	flags := flag.NewFlagSet("credential kimi", flag.ContinueOnError)
 	home := flags.String("home", "~/.kimi-code", "Kimi Code home")

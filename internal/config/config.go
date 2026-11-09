@@ -35,10 +35,11 @@ type PollingConfig struct {
 }
 
 type ProvidersConfig struct {
-	Claude ClaudeConfig `yaml:"claude"`
-	ZAI    ZAIConfig    `yaml:"zai"`
-	Codex  CodexConfig  `yaml:"codex"`
-	Kimi   KimiConfig   `yaml:"kimi"`
+	OpenCode OpenCodeConfig `yaml:"opencode"`
+	Claude   ClaudeConfig   `yaml:"claude"`
+	ZAI      ZAIConfig      `yaml:"zai"`
+	Codex    CodexConfig    `yaml:"codex"`
+	Kimi     KimiConfig     `yaml:"kimi"`
 }
 
 type ClaudeConfig struct {
@@ -74,6 +75,12 @@ type CodexAccountConfig struct {
 	Home  string `yaml:"home"`
 }
 
+type OpenCodeConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	DatabasePath string `yaml:"databasePath"`
+	StatePath    string `yaml:"statePath"`
+}
+
 type KimiConfig struct {
 	Enabled        bool                `yaml:"enabled"`
 	Accounts       []KimiAccountConfig `yaml:"accounts"`
@@ -105,10 +112,11 @@ func Default() Config {
 		Storage: StorageConfig{Database: filepath.Join(dataDir, "quotadeck", "quotadeck.db"), RetentionDays: 30},
 		Polling: PollingConfig{Interval: "60s", Timeout: "20s"},
 		Providers: ProvidersConfig{
-			Claude: ClaudeConfig{Enabled: true, Binary: "cswap"},
-			ZAI:    ZAIConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
-			Codex:  CodexConfig{Enabled: true, Binary: "codex"},
-			Kimi:   KimiConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
+			OpenCode: OpenCodeConfig{Enabled: true},
+			Claude:   ClaudeConfig{Enabled: true, Binary: "cswap"},
+			ZAI:      ZAIConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
+			Codex:    CodexConfig{Enabled: true, Binary: "codex"},
+			Kimi:     KimiConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
 		},
 	}
 }

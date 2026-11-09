@@ -100,3 +100,10 @@ Open **Manage plans** on the dashboard for the same setup without editing files 
 For local Kimi Code authentication, the helper follows the OAuth reference and region in `~/.kimi-code/config.toml` (or `providers.kimi.homePaths`). It renews expiring tokens in the CLI credential store, so Kimi Code does not need to remain open. Claude Code caches helper results for one minute. Selecting Claude or Z.ai restores the previous credential helper.
 
 QuotaDeck never includes a stored key in API responses, diagnostics, logs, or SQLite. Leaving the key field blank keeps the already stored value.
+
+### OpenCode v2
+
+`providers.opencode.enabled` defaults to `true`. Optional `databasePath` and
+`statePath` override the OpenCode database and state directory; both must refer
+to the same OpenCode installation. By default they follow XDG_DATA_HOME and
+XDG_STATE_HOME. No credential values belong in the QuotaDeck configuration.

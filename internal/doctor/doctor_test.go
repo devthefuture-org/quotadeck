@@ -20,6 +20,7 @@ func isolatedConfig(t *testing.T) config.Config {
 	temp := t.TempDir()
 	cfg.Providers.Kimi.SettingsPaths = []string{filepath.Join(temp, "absent-settings.json")}
 	cfg.Providers.Kimi.HomePaths = []string{temp}
+	cfg.Providers.OpenCode.DatabasePath = filepath.Join(temp, "opencode.db")
 	return cfg
 }
 
@@ -48,6 +49,7 @@ func TestDisabledProvidersNeverAcceptSources(t *testing.T) {
 	cfg.Providers.ZAI.Enabled = false
 	cfg.Providers.Codex.Enabled = false
 	cfg.Providers.Kimi.Enabled = false
+	cfg.Providers.OpenCode.Enabled = false
 
 	report := (Collector{Config: cfg, Version: "test"}).Collect(t.Context())
 	for _, source := range report.Sources {

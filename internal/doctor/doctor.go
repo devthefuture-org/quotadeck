@@ -11,6 +11,7 @@ import (
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
+	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
 
@@ -51,13 +52,24 @@ func (c Collector) Collect(ctx context.Context) Report {
 	}
 	selfPath, _ := os.Executable()
 	report.Tools = append(report.Tools, Tool{Name: "quotadeck", Present: true, Path: selfPath, Version: "quotadeck " + c.Version})
-	for _, name := range []string{"cswap", "codex", "codexbar", "kimi"} {
+	for _, name := range []string{"cswap", "codex", "codexbar", "kimi", "opencode"} {
 		report.Tools = append(report.Tools, inspectTool(ctx, name))
 	}
 	report.Sources = append(report.Sources, c.claudeSources()...)
 	report.Sources = append(report.Sources, c.zaiSources()...)
 	report.Sources = append(report.Sources, c.kimiSources()...)
 	report.Sources = append(report.Sources, c.codexSources()...)
+	credentials, err := opencode.LocalCredentials(ctx, c.Config.Providers.OpenCode)
+	reason := "connect OpenCode Console in OpenCode v2"
+	accepted := err == nil && len(credentials) > 0 && c.Config.Providers.OpenCode.Enabled
+	if accepted {
+		reason = "local OpenCode Console connection available"
+	}
+	if !c.Config.Providers.OpenCode.Enabled {
+		reason = "provider disabled"
+	}
+	database, _ := opencode.Paths(c.Config.Providers.OpenCode)
+	report.Sources = append(report.Sources, SourceCheck{Provider: "opencode", Source: "opencode-v2", Accepted: accepted, Reason: reason, Metadata: map[string]string{"path": database}})
 	return report
 }
 

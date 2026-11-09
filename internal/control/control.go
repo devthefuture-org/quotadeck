@@ -17,6 +17,7 @@ import (
 
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
+	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
 
@@ -49,10 +50,11 @@ type Paths struct {
 }
 
 type Status struct {
-	Mode   string       `json:"mode"`
-	Claude ClaudeStatus `json:"claude"`
-	ZAI    ZAIStatus    `json:"zai"`
-	Kimi   KimiStatus   `json:"kimi"`
+	OpenCode KimiStatus   `json:"opencode"`
+	Mode     string       `json:"mode"`
+	Claude   ClaudeStatus `json:"claude"`
+	ZAI      ZAIStatus    `json:"zai"`
+	Kimi     KimiStatus   `json:"kimi"`
 }
 
 type ClaudeStatus struct {
@@ -84,6 +86,7 @@ type Manager struct {
 	runner       runner.Runner
 	paths        Paths
 	kimiHomes    []string
+	openCode     config.OpenCodeConfig
 
 	mu sync.Mutex
 }
@@ -169,6 +172,18 @@ func (m *Manager) Status(states []domain.AccountState) Status {
 		status.Kimi.Model, _ = environment["ANTHROPIC_MODEL"].(string)
 		status.Kimi.Endpoint, _ = environment["ANTHROPIC_BASE_URL"].(string)
 	}
+	status.OpenCode.Endpoint = opencode.Endpoint
+	if _, ok := m.localOpenCode(); ok {
+		status.OpenCode.Configured = true
+		status.OpenCode.LocalAvailable = true
+		status.OpenCode.Source = "opencode-v2"
+	}
+	if openCodeActive(settings) {
+		status.OpenCode.Active = true
+		status.Mode = "opencode"
+		env, _ := settings["env"].(map[string]any)
+		status.OpenCode.Model, _ = env["ANTHROPIC_MODEL"].(string)
+	}
 	return status
 }
 
@@ -198,7 +213,11 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	changed = disableZAI(settings) || changed
+	otherChanged, err := m.disableOpenCode(settings)
+	if err != nil {
+		return err
+	}
+	changed = otherChanged || disableZAI(settings) || changed
 	if changed {
 		if err := writeSettings(m.paths.ClaudeSettings, settings, snapshot.mode); err != nil {
 			return fmt.Errorf("disable API plan for Claude Code: %w", err)
@@ -324,6 +343,9 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 		return err
 	}
 	if _, err := m.disableKimi(settings); err != nil {
+		return err
+	}
+	if _, err := m.disableOpenCode(settings); err != nil {
 		return err
 	}
 	if err := enableZAI(settings, effectiveKey); err != nil {

@@ -53,3 +53,11 @@ providers:
     #     keyEnv: KIMI_API_KEY_PERSONAL
     # homePaths:
     #   - ~/.kimi-code
+
+  opencode:
+    enabled: true
+    # OpenCode v2 Console connections are discovered from its SQLite database.
+    # Defaults follow XDG_DATA_HOME and XDG_STATE_HOME (or ~/.local/share,
+    # ~/.local/state). State must match the OpenCode process for OAuth locking.
+    # databasePath: ~/.local/share/opencode/opencode.db
+    # statePath: ~/.local/state/opencode

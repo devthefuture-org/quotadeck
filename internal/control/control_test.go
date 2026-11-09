@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
 	"github.com/devthefuture-org/quotadeck/internal/runner"
 )
@@ -61,7 +62,7 @@ func testManager(t *testing.T, commandRunner runner.Runner) (*Manager, Paths) {
 		Environment:    filepath.Join(root, "config", "environment"),
 		ClaudeSettings: filepath.Join(root, "claude", "settings.json"),
 	}
-	return New("cswap", commandRunner, paths).WithKimiHomes([]string{root}), paths
+	return New("cswap", commandRunner, paths).WithKimiHomes([]string{root}).WithOpenCode(config.OpenCodeConfig{DatabasePath: filepath.Join(root, "opencode.db"), StatePath: root}), paths
 }
 
 func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {

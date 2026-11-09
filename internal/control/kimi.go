@@ -129,6 +129,9 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 	if err := m.preservePlanKeys(settings); err != nil {
 		return err
 	}
+	if _, err := m.disableOpenCode(settings); err != nil {
+		return err
+	}
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
 		return err

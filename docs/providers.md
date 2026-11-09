@@ -79,3 +79,31 @@ API keys remain supported: paste one in **Manage plans**, or supply `KIMI_API_KE
 The selection applies to new Claude Code processes. Existing sessions retain the environment with which they started.
 
 See [configuration](./configuration#z-ai-environment-references) when running QuotaDeck through systemd or a desktop launcher.
+
+## OpenCode Go / Go Plus
+
+QuotaDeck discovers OpenCode Console connections stored by OpenCode v2 in
+`$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share/opencode/opencode.db`).
+Connect Console in OpenCode v2 first. OAuth and stored Console API keys are supported;
+custom Console servers and legacy v1 auth.json files are not used.
+
+QuotaDeck reads the rolling five-hour, weekly and monthly Go allowance from
+`https://opencode.ai/inference/go/v1/usage`, including reset times. Go and Go Plus
+share this API, which does not identify the subscription tier; cards say **Go**.
+Missing or rejected quota responses are reported as errors, not zero usage.
+
+**Use OpenCode Go in Claude Code** selects the available `deepseek-v4.1-flash`
+alias for all model tiers and subagents. Go does not currently expose the dated
+`deepseek-v4.1-flash-1017` model. The official base URL is
+`https://opencode.ai/inference/go/anthropic`. DeepSeek requires the **Global**
+region in the workspace's Console privacy settings; QuotaDeck never changes that
+setting automatically.
+
+Claude Code uses `quotadeck credential opencode` as its credential helper. The
+selected connection is pinned by ID; switching or removing it in OpenCode does
+not silently redirect existing Claude sessions to another account. Tokens are
+reread and renewed when necessary. Model preferences, custom headers and any
+previous credential helper are restored when selecting another plan.
+
+References: [Go](https://opencode.ai/v2/docs/console/go/),
+[Claude Code setup](https://opencode.ai/v2/docs/console/harnesses/claude-code/).

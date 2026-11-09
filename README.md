@@ -30,7 +30,7 @@ A Codex account whose session has expired offers **Reconnect** on its own card, 
 
 Choose **System**, **Light**, or **Dark** in the dashboard header. The theme preference is saved locally; **System** follows changes to your device's appearance automatically.
 
-The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan and Kimi K3 can be activated alongside their quotas. Kimi can reuse the local Kimi Code login and renew it automatically, without a separate API key. **Manage plans** opens setup for all three providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
+The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan, Kimi K3 and OpenCode Go (DeepSeek V4.1 Flash) can be activated alongside their quotas. Kimi can reuse the local Kimi Code login and renew it automatically, without a separate API key. **Manage plans** opens setup for these providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
 
 ## Install
 
@@ -58,6 +58,7 @@ See the [installation guide](https://devthefuture-org.github.io/quotadeck/gettin
 - **Claude:** `cswap list --json` is the canonical multi-account source. Explicit plan selection calls `cswap switch <slot> --json`; QuotaDeck never calls `cswap export`, opens its credential store, or refreshes Claude OAuth itself.
 - **Codex:** one `codex app-server --stdio` process per configured `CODEX_HOME` reads account and rate-limit metadata. QuotaDeck does not read or modify `auth.json`.
 - **Z.ai:** explicit environment references, `ZAI_API_KEY`, `GLM_API_KEY`, and recognized Z.ai entries in Claude settings. Tokens never enter the domain model, database, diagnostics, logs, or API responses; in-memory sources are deduplicated with a truncated SHA-256 fingerprint.
+- **OpenCode Go / Go Plus:** rolling, weekly and monthly allowance from the local OpenCode v2 Console connection, with automatic OAuth renewal and DeepSeek V4.1 Flash selection for Claude Code.
 - **Kimi:** the Kimi for Coding plan, read from the Kimi Code usage API with `KIMI_API_KEY`/`KIMI_CODING_API_KEY`, a recognized Kimi base URL in Claude settings, or the signed-in Kimi Code CLI credentials under `~/.kimi-code`. Same privacy rules as Z.ai.
 
 Full setup instructions live in the [provider guide](https://devthefuture-org.github.io/quotadeck/providers).

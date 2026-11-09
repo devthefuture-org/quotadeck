@@ -43,9 +43,10 @@ type Snapshot = {
 type AccountState = { account: Account; snapshot: Snapshot }
 type StateResponse = { generatedAt: string; providers: Provider[]; accounts: AccountState[] }
 type ControlState = {
-  mode: 'claude' | 'zai' | 'kimi' | 'unknown'
+  mode: 'claude' | 'zai' | 'kimi' | 'opencode' | 'unknown'
   claude: { available: boolean; activeAccountId?: string }
   zai: { configured: boolean; active: boolean; endpoint: string }
+  opencode: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
   kimi: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
 }
 type DoctorReport = {
@@ -57,16 +58,18 @@ type DoctorReport = {
   sources: { provider: string; source: string; accepted: boolean; reason: string; metadata?: Record<string, string> }[]
 }
 
-const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2, kimi: 3 }
-const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi' }
+const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2, kimi: 3, opencode: 4 }
+const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi', opencode: 'OpenCode Go' }
 type APIPlan = 'zai' | 'kimi'
+type SelectablePlan = APIPlan | 'opencode'
 const apiPlans = {
+  opencode: { label: 'OpenCode Go', glyph: 'O', description: 'DeepSeek V4.1 Flash for Claude Code' },
   zai: { label: 'Z.ai', glyph: 'Z', description: 'GLM Coding Plan for Claude Code', endpoint: 'https://api.z.ai/api/anthropic', keyURL: 'https://z.ai/manage-apikey/apikey-list' },
   kimi: { label: 'Kimi', glyph: '☾', description: 'Kimi K3 for Claude Code', endpoint: 'https://api.kimi.com/coding/', keyURL: 'https://www.kimi.com/code/console' },
 }
 
-function isPlanSelected(control: ControlState | null, provider: APIPlan) {
-  return control?.mode === provider && (provider !== 'kimi' || control.kimi?.model === 'k3')
+function isPlanSelected(control: ControlState | null, provider: SelectablePlan) {
+  return control?.mode === provider && (provider !== 'kimi' || control.kimi?.model === 'k3') && (provider !== 'opencode' || control.opencode?.model === 'deepseek-v4.1-flash')
 }
 
 function App() {
@@ -104,6 +107,7 @@ function App() {
   const selectedAccount = state?.accounts.find(item => item.account.id === control?.claude.activeAccountId)?.account
   const selectedPlan = !control ? 'Plan selection unavailable'
     : control.mode === 'zai' ? 'Z.ai · GLM Coding Plan'
+    : control.mode === 'opencode' ? 'OpenCode Go · DeepSeek V4.1 Flash'
     : control.mode === 'kimi' ? `Kimi · ${control.kimi?.model === 'k3' ? 'K3' : control.kimi?.model || 'Coding Plan'}`
     : control.mode === 'claude' ? [selectedAccount?.label || 'Claude subscription', selectedAccount?.plan].filter(Boolean).join(' · ')
     : 'No plan selected'
@@ -242,19 +246,19 @@ function App() {
             {Array.from(groups.entries()).map(([provider, items]) => (
               <section class="provider-group" key={provider}>
                 <div class="section-heading">
-                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : provider === 'kimi' ? '☾' : 'Z'}</span>
+                  <span class={`provider-glyph ${provider}`}>{provider === 'claude' ? 'C' : provider === 'codex' ? '⌘' : provider === 'kimi' ? '☾' : provider === 'opencode' ? 'O' : 'Z'}</span>
                   <div><p>{provider === 'claude' ? 'Claude Code' : providerLabel[provider] ?? provider}</p><span>{items.length} {items.length === 1 ? 'account' : 'accounts'}</span></div>
                 </div>
                 <div class="provider-content">
-                  {(provider === 'zai' || provider === 'kimi') && <div class="provider-plan-action">
-                    <div><strong>{apiPlans[provider].description}</strong><small>{isPlanSelected(control, provider) ? 'Selected for new sessions' : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' ? 'Use your local Kimi Code login for new sessions' : `Use your configured ${apiPlans[provider].label} key for new sessions`}</small></div>
+                  {(provider === 'zai' || provider === 'kimi' || provider === 'opencode') && <div class="provider-plan-action">
+                    <div><strong>{apiPlans[provider].description}</strong><small>{isPlanSelected(control, provider) ? 'Selected for new sessions' : provider === 'opencode' ? 'Use your local OpenCode connection for new sessions' : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' ? 'Use your local Kimi Code login for new sessions' : `Use your configured ${apiPlans[provider].label} key for new sessions`}</small></div>
                     <button class={isPlanSelected(control, provider) ? 'selected-plan-button' : 'plan-button'}
                       disabled={!control || isPlanSelected(control, provider) || plans.busy !== ''}
                       onClick={() => {
                         if (control?.[provider]?.configured) void plans.selectAPIPlan(provider)
                         else {
                           setSetupOpen(true)
-                          requestAnimationFrame(() => plans.apiKeyInputs[provider].current?.focus())
+                          requestAnimationFrame(() => provider !== 'opencode' && plans.apiKeyInputs[provider].current?.focus())
                         }
                       }}>
                       {plans.busy === `${provider}-activate` ? 'Switching…' : isPlanSelected(control, provider) ? 'Selected in Claude Code' : control?.[provider]?.configured ? `Use ${apiPlans[provider].label}${provider === 'kimi' ? ' K3' : ''} in Claude Code` : `Set up ${apiPlans[provider].label}`}
@@ -286,7 +290,7 @@ function App() {
           {state && state.accounts.length === 0 && (
             <section class="empty-state">
               <span>◇</span><h3>No quota source detected yet</h3>
-              <p>Use Manage plans to set up Claude, Z.ai or Kimi, or open diagnostics to inspect available quota sources.</p>
+              <p>Use Manage plans to set up Claude, Z.ai, Kimi or OpenCode Go, or open diagnostics to inspect available quota sources.</p>
               <button class="refresh-button" onClick={() => setView('diagnostics')}>Open diagnostics</button>
             </section>
           )}
@@ -417,8 +421,8 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
       activate ? 'Plan selection updated. New Claude Code sessions will use it.' : `${apiPlans[provider].label} API key saved.`)
   }
 
-  function selectAPIPlan(provider: APIPlan) {
-    return request(`/api/v1/control/${provider}`, 'PUT', { apiKey: '', activate: true }, `${provider}-activate`)
+  function selectAPIPlan(provider: SelectablePlan) {
+    return request(`/api/v1/control/${provider}`, 'PUT', provider === 'opencode' ? { activate: true } : { apiKey: '', activate: true }, `${provider}-activate`)
   }
 
   return { apiKeys, setAPIKey, apiKeyInputs, busy, message, error, selectClaude, setupClaude, configureAPIPlan, selectAPIPlan }
@@ -444,6 +448,20 @@ function PlanSetup({ state, control, plans }: { state: StateResponse | null; con
             {busy === 'cswap-setup' ? 'Setting up…' : control.claude.available ? 'Set up cswap' : 'Install & set up'}
           </button>
         </div> : <p class="control-empty">{control ? 'Your accounts are ready. Choose Use in Claude Code on a quota card below.' : 'Plan controls are temporarily unavailable.'}</p>}
+      </section>
+      <section class="plan-panel">
+        <div class="plan-heading">
+          <div><span class="provider-glyph opencode">O</span><div><p>OpenCode Go</p><small>DeepSeek V4.1 Flash for Claude Code</small></div></div>
+          <span class={`availability ${control?.opencode?.configured ? 'ok' : ''}`}>{control?.opencode?.configured ? 'local login' : 'setup needed'}</span>
+        </div>
+        <div class="plan-form">
+          <p>{control?.opencode?.configured ? 'Your OpenCode v2 connection is available. QuotaDeck renews it automatically and tracks your Go usage.' : 'Connect OpenCode Console in OpenCode v2 to see your Go quotas and use DeepSeek in Claude Code.'}</p>
+          <p>Uses the DeepSeek V4.1 Flash model available through Go. Enable Global in your OpenCode workspace privacy settings to allow this model.</p>
+          <button class="refresh-button" disabled={!control?.opencode?.configured || busy !== '' || isPlanSelected(control, 'opencode')} onClick={() => void plans.selectAPIPlan('opencode')}>
+            {busy === 'opencode-activate' ? 'Switching…' : isPlanSelected(control, 'opencode') ? 'Selected in Claude Code' : 'Use DeepSeek V4.1 Flash'}
+          </button>
+          <a href="https://opencode.ai/console" target="_blank" rel="noreferrer">Open OpenCode Console ↗</a>
+        </div>
       </section>
       {(['zai', 'kimi'] as const).map(provider => <section class="plan-panel" key={provider}>
         <div class="plan-heading">

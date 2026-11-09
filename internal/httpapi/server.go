@@ -20,6 +20,7 @@ import (
 	"github.com/devthefuture-org/quotadeck/internal/poller"
 	"github.com/devthefuture-org/quotadeck/internal/provider/codex"
 	"github.com/devthefuture-org/quotadeck/internal/provider/kimi"
+	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 )
 
 //go:embed ui
@@ -40,6 +41,7 @@ type Controller interface {
 	SwitchClaude(ctx context.Context, accountID string) error
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
 	ConfigureKimi(ctx context.Context, apiKey string, activate bool) error
+	ConfigureOpenCode(ctx context.Context) error
 }
 
 // CodexLogins runs Codex sign-in sessions. They outlive the request that starts
@@ -85,6 +87,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
 	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
 	mux.HandleFunc("PUT /api/v1/control/kimi", s.configureKimi)
+	mux.HandleFunc("PUT /api/v1/control/opencode", s.configureOpenCode)
 	mux.HandleFunc("POST /api/v1/control/codex/login", s.startCodexLogin)
 	mux.HandleFunc("GET /api/v1/control/codex/login", s.codexLoginStatus)
 	mux.HandleFunc("DELETE /api/v1/control/codex/login/{loginId}", s.cancelCodexLogin)
@@ -258,6 +261,7 @@ func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request)
 		status.Claude.ActiveAccountID = input.AccountID
 		status.ZAI.Active = false
 		status.Kimi.Active = false
+		status.OpenCode.Active = false
 	})
 }
 
@@ -322,6 +326,7 @@ func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request)
 			status.Mode = "zai"
 			status.ZAI.Active = true
 			status.Kimi.Active = false
+			status.OpenCode.Active = false
 		}
 	})
 }
@@ -356,6 +361,7 @@ func (s *Server) configureKimi(writer http.ResponseWriter, request *http.Request
 			status.Mode = "kimi"
 			status.Kimi.Active = true
 			status.Kimi.Model = "k3"
+			status.OpenCode.Active = false
 			status.ZAI.Active = false
 		}
 	})
@@ -594,4 +600,32 @@ func (s *Server) resolveCodexAccount(writer http.ResponseWriter, request *http.R
 		return domain.AccountCandidate{}, false
 	}
 	return candidate, true
+}
+
+func (s *Server) configureOpenCode(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		Activate bool `json:"activate"`
+	}
+	if decodeJSON(writer, request, &input) != nil || !input.Activate {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "activate must be true")
+		return
+	}
+	if err := s.controller.ConfigureOpenCode(request.Context()); err != nil {
+		if errors.Is(err, opencode.ErrLoginRequired) {
+			writeError(writer, http.StatusConflict, "opencode_login_required", "connect OpenCode Console in OpenCode v2, then retry")
+		} else {
+			writeError(writer, http.StatusInternalServerError, "configuration_failed", "the OpenCode connection could not be activated")
+		}
+		return
+	}
+	s.writeControlResult(writer, request, "opencode", func(status *control.Status) {
+		status.Mode = "opencode"
+		status.OpenCode.Active = true
+		status.OpenCode.Model = opencode.Model
+		status.Kimi.Active = false
+		status.ZAI.Active = false
+	})
 }
