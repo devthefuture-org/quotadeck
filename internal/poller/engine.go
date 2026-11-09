@@ -199,6 +199,25 @@ func (e *Engine) refreshProvider(parent context.Context, provider domain.Provide
 	return e.runProviderRefresh(parent, provider)
 }
 
+// RefreshProviderWait rereads the provider now, waiting out any in-flight
+// poll instead of skipping like RefreshProvider. A caller that reports a
+// refresh as "completed" owes its reader a state read after a real reread.
+func (e *Engine) RefreshProviderWait(ctx context.Context, providerID string) error {
+	var target domain.Provider
+	for _, provider := range e.providers {
+		if provider.ID() == providerID {
+			target = provider
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("provider %q is not enabled", providerID)
+	}
+	lock := e.providerLock(providerID)
+	lock.Lock()
+	defer lock.Unlock()
+	return e.runProviderRefresh(ctx, target)
+}
+
 func (e *Engine) runProviderRefresh(parent context.Context, provider domain.Provider) error {
 	ctx, cancel := context.WithTimeout(parent, e.timeout)
 	defer cancel()
@@ -260,6 +279,18 @@ func (e *Engine) fetchAccount(ctx context.Context, provider domain.Provider, can
 			Source: candidate.Source, SourceMeta: cloneMeta(candidate.SourceMeta),
 		}
 		code := domain.ErrorCode(fetchErr)
+		// The source itself dropped the account: keeping a stale row would
+		// display a deleted account forever instead of letting it go.
+		if code == "account_missing" {
+			if _, delErr := e.store.DeleteAccount(persistCtx, candidate.ProviderID, candidate.ID); delErr != nil {
+				return fmt.Errorf("drop removed account: %w", delErr)
+			}
+			e.hub.Publish(map[string]any{
+				"type": "state", "providerId": candidate.ProviderID, "accountId": candidate.ID,
+				"status": "removed", "at": time.Now().UTC(),
+			})
+			return fetchErr
+		}
 		status := domain.StatusUnavailable
 		if strings.Contains(code, "auth") || strings.Contains(code, "credential") {
 			status = domain.StatusAuthError

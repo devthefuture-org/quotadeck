@@ -50,6 +50,7 @@ var (
 	ErrCswapInstallerMissing = errors.New("neither uv nor pipx is available to install cswap")
 	ErrCswapCustomBinary     = errors.New("automatic installation requires the default cswap binary name")
 	ErrClaudeLoginRequired   = errors.New("Claude Code must be logged in before cswap can add an account")
+	ErrClaudeAccountActive   = errors.New("switch to another account before removing it")
 )
 
 type Paths struct {
@@ -240,6 +241,66 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 			_ = restoreFile(m.paths.ClaudeSettings, snapshot)
 		}
 		return fmt.Errorf("cswap could not switch account: %w", err)
+	}
+	return nil
+}
+
+// DisableClaude holds a cswap account out of rotation (disable) or returns
+// it (enable). Credentials remain entirely inside cswap.
+func (m *Manager) DisableClaude(ctx context.Context, accountID string, disable bool) error {
+	slot, err := claudeSlot(accountID)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, err := m.runner.LookPath(m.claudeBinary); err != nil {
+		return fmt.Errorf("cswap is unavailable")
+	}
+	command := "enable"
+	if disable {
+		command = "disable"
+	}
+	// cswap only accepts --json for list, status and switch.
+	if _, err := m.runner.Run(ctx, m.claudeBinary, command, strconv.Itoa(slot)); err != nil {
+		return fmt.Errorf("cswap could not %s the account: %w", command, err)
+	}
+	return nil
+}
+
+// RemoveClaude deletes the account from cswap, discarding its stored
+// credentials; this cannot be undone. The account cswap currently serves is
+// refused: switch first.
+func (m *Manager) RemoveClaude(ctx context.Context, accountID string) error {
+	slot, err := claudeSlot(accountID)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, err := m.runner.LookPath(m.claudeBinary); err != nil {
+		return fmt.Errorf("cswap is unavailable")
+	}
+	output, err := m.runner.Run(ctx, m.claudeBinary, "list", "--json")
+	if err != nil {
+		return fmt.Errorf("inspect cswap accounts: %w", err)
+	}
+	var payload struct {
+		SchemaVersion       int  `json:"schemaVersion"`
+		ActiveAccountNumber *int `json:"activeAccountNumber"`
+		Error               any  `json:"error"`
+	}
+	if err := json.Unmarshal(output.Stdout, &payload); err != nil || payload.SchemaVersion != 1 || payload.Error != nil {
+		return errors.New("cswap could not report its accounts")
+	}
+	if payload.ActiveAccountNumber != nil && *payload.ActiveAccountNumber == slot {
+		return ErrClaudeAccountActive
+	}
+	// cswap only accepts --json for list, status and switch, and its remove
+	// asks an interactive [y/N] with no non-interactive flag: the answer is
+	// piped, as cswap has no --yes.
+	if _, err := m.runner.RunWithInput(ctx, "y\n", m.claudeBinary, "remove", strconv.Itoa(slot)); err != nil {
+		return fmt.Errorf("cswap could not remove the account: %w", err)
 	}
 	return nil
 }

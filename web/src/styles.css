@@ -160,6 +160,12 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .account-plan-action small { color: var(--muted); font-size: 11px; }
 .account-plan-action button { min-height: 40px; font-size: 12px; }
 
+.account-manage { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.account-manage button { min-height: 32px; font-size: 11px; flex: 0 0 auto; }
+.account-manage-button { color: var(--muted); }
+.account-remove-button { color: #c0392b; margin-left: auto; }
+.account-remove-button:hover:not(:disabled) { border-color: #c0392b; }
+
 .account-signin { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .account-signin small { color: var(--muted); font-size: 11px; }
 .account-signin button, .account-signin a { min-height: 38px; font-size: 12px; }

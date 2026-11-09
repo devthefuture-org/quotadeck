@@ -279,6 +279,16 @@ function App() {
                         unavailable: !control?.claude.available,
                         onSelect: () => void plans.selectClaude(item.account.id),
                       } : undefined}
+                      accountActions={item.account.providerId === 'claude' ? {
+                        busy: plans.busy,
+                        onToggle: () => {
+                          if (item.account.disabled) void plans.manageClaude(item.account.id, 'enable')
+                          else void plans.manageClaude(item.account.id, 'disable')
+                        },
+                        onRemove: () => {
+                          if (confirm(`Remove ${item.account.label} from cswap? Its stored credentials are deleted and this cannot be undone.`)) void plans.manageClaude(item.account.id, 'remove')
+                        },
+                      } : undefined}
                       onSignedIn={() => void load()}
                     />)}
                   </div>
@@ -304,7 +314,9 @@ function App() {
 
 type PlanAction = { busy: boolean; disabled: boolean; unavailable: boolean; onSelect: () => void }
 
-function AccountCard({ state, mode, now, selected, planAction, onSignedIn }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean; planAction?: PlanAction; onSignedIn?: () => void }) {
+type AccountActions = { busy: string; onToggle: () => void; onRemove: () => void }
+
+function AccountCard({ state, mode, now, selected, planAction, accountActions, onSignedIn }: { state: AccountState; mode: 'used' | 'remaining'; now: number; selected: boolean; planAction?: PlanAction; accountActions?: AccountActions; onSignedIn?: () => void }) {
   const { account, snapshot } = state
   const windows = snapshot.windows ?? []
   const mostConstrained = windows.reduce<QuotaWindow | null>((selected, window) => {
@@ -341,6 +353,18 @@ function AccountCard({ state, mode, now, selected, planAction, onSignedIn }: { s
           {planAction.busy ? 'Switching…' : selected ? 'Selected in Claude Code' : account.disabled ? 'Account disabled' : 'Use in Claude Code'}
         </button>
         {planAction.unavailable && !account.disabled && <small>Plan selection unavailable. Check Manage plans.</small>}
+      </div>}
+      {accountActions && <div class="account-manage">
+        <button class="account-manage-button"
+          disabled={accountActions.busy !== ''}
+          onClick={accountActions.onToggle}>
+          {accountActions.busy === `${account.id}:disable` || accountActions.busy === `${account.id}:enable` ? 'Updating…' : account.disabled ? 'Enable account' : 'Disable account'}
+        </button>
+        <button class="account-remove-button"
+          disabled={accountActions.busy !== ''}
+          onClick={accountActions.onRemove}>
+          {accountActions.busy === `${account.id}:remove` ? 'Removing…' : 'Remove'}
+        </button>
       </div>}
     </article>
   )
@@ -384,6 +408,15 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
     return request('/api/v1/control/claude/switch', 'POST', { accountId }, accountId)
   }
 
+  function manageClaude(accountId: string, action: 'disable' | 'enable' | 'remove') {
+    const message = action === 'remove'
+      ? 'Account removed from cswap.'
+      : action === 'disable'
+        ? 'Account held out of rotation in cswap.'
+        : 'Account returned to rotation in cswap.'
+    return request('/api/v1/control/claude/account', 'POST', { accountId, action }, `${accountId}:${action}`, message)
+  }
+
   async function setupClaude() {
     if (inFlight.current) return
     inFlight.current = true
@@ -425,7 +458,7 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
     return request(`/api/v1/control/${provider}`, 'PUT', provider === 'opencode' ? { activate: true } : { apiKey: '', activate: true }, `${provider}-activate`)
   }
 
-  return { apiKeys, setAPIKey, apiKeyInputs, busy, message, error, selectClaude, setupClaude, configureAPIPlan, selectAPIPlan }
+  return { apiKeys, setAPIKey, apiKeyInputs, busy, message, error, selectClaude, manageClaude, setupClaude, configureAPIPlan, selectAPIPlan }
 }
 
 function PlanSetup({ state, control, plans }: { state: StateResponse | null; control: ControlState | null; plans: ReturnType<typeof usePlanControl> }) {

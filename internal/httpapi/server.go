@@ -39,6 +39,8 @@ type Controller interface {
 	Status(states []domain.AccountState) control.Status
 	SetupClaude(ctx context.Context) (control.ClaudeSetupResult, error)
 	SwitchClaude(ctx context.Context, accountID string) error
+	DisableClaude(ctx context.Context, accountID string, disable bool) error
+	RemoveClaude(ctx context.Context, accountID string) error
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
 	ConfigureKimi(ctx context.Context, apiKey string, activate bool) error
 	ConfigureOpenCode(ctx context.Context) error
@@ -85,6 +87,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/control", s.controlStatus)
 	mux.HandleFunc("POST /api/v1/control/claude/setup", s.setupClaude)
 	mux.HandleFunc("POST /api/v1/control/claude/switch", s.switchClaude)
+	mux.HandleFunc("POST /api/v1/control/claude/account", s.manageClaudeAccount)
 	mux.HandleFunc("PUT /api/v1/control/zai", s.configureZAI)
 	mux.HandleFunc("PUT /api/v1/control/kimi", s.configureKimi)
 	mux.HandleFunc("PUT /api/v1/control/opencode", s.configureOpenCode)
@@ -265,6 +268,85 @@ func (s *Server) switchClaude(writer http.ResponseWriter, request *http.Request)
 	})
 }
 
+// manageClaudeAccount disables, re-enables or removes a cswap account.
+// Existence is validated against live discovery, not the store: an account
+// dropped from cswap must not stay targetable.
+func (s *Server) manageClaudeAccount(writer http.ResponseWriter, request *http.Request) {
+	if !s.controlRequestAllowed(writer, request) {
+		return
+	}
+	var input struct {
+		AccountID string `json:"accountId"`
+		Action    string `json:"action"`
+	}
+	if err := decodeJSON(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain accountId and action")
+		return
+	}
+	switch input.Action {
+	case "disable", "enable", "remove":
+	default:
+		writeError(writer, http.StatusBadRequest, "invalid_action", "action must be disable, enable or remove")
+		return
+	}
+	if input.Action == "remove" {
+		// The active-account guard sits before the cswap call: removing the
+		// account Claude Code currently serves would break the session it
+		// backs. cswap itself allows disabling the active account, so
+		// disable and enable pass through.
+		states, err := s.engine.Current(request.Context())
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "state_unavailable", "state is temporarily unavailable")
+			return
+		}
+		for _, state := range states {
+			if state.Account.ID == input.AccountID && state.Account.ProviderID == "claude" && state.Account.Active {
+				writeError(writer, http.StatusConflict, "claude_account_active", "switch to another account before removing it")
+				return
+			}
+		}
+	}
+	if _, err := s.engine.DiscoverAccount(request.Context(), "claude", input.AccountID); err != nil {
+		writeError(writer, http.StatusBadRequest, "unknown_account", "this Claude account is no longer listed by cswap")
+		return
+	}
+	var err error
+	switch input.Action {
+	case "disable":
+		err = s.controller.DisableClaude(request.Context(), input.AccountID, true)
+	case "enable":
+		err = s.controller.DisableClaude(request.Context(), input.AccountID, false)
+	case "remove":
+		err = s.controller.RemoveClaude(request.Context(), input.AccountID)
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, control.ErrInvalidAccount):
+			writeError(writer, http.StatusBadRequest, "invalid_account", "select an available Claude account")
+		case errors.Is(err, control.ErrClaudeAccountActive):
+			writeError(writer, http.StatusConflict, "claude_account_active", "switch to another account before removing it")
+		default:
+			writeError(writer, http.StatusBadGateway, "cswap_account_failed", "cswap could not update this account")
+		}
+		return
+	}
+	// RefreshProviderWait waits out an in-flight poll, so "completed"
+	// reflects a state read after a real reread instead of a skipped one.
+	refresh := "completed"
+	if err := s.engine.RefreshProviderWait(request.Context(), "claude"); err != nil {
+		refresh = "completed_with_errors"
+	}
+	states, err := s.engine.Current(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "state_unavailable", "the account was updated but state is temporarily unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"status": "updated", "refresh": refresh,
+		"control": s.controller.Status(states),
+	})
+}
+
 func (s *Server) setupClaude(writer http.ResponseWriter, request *http.Request) {
 	if !s.controlRequestAllowed(writer, request) {
 		return
@@ -284,7 +366,7 @@ func (s *Server) setupClaude(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	refresh := "completed"
-	if err := s.engine.RefreshProvider(request.Context(), "claude"); err != nil {
+	if err := s.engine.RefreshProviderWait(request.Context(), "claude"); err != nil {
 		refresh = "completed_with_errors"
 	}
 	states, err := s.engine.Current(request.Context())

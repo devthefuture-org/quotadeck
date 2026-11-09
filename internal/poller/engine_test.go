@@ -237,6 +237,48 @@ func TestRefreshProviderAfterChangeRunsOnceThePollInFlightEnds(t *testing.T) {
 	}
 }
 
+// A caller that reports a refresh as "completed" must hold a state read after
+// a real reread: RefreshProviderWait waits out the in-flight poll instead of
+// skipping it like RefreshProvider.
+func TestRefreshProviderWaitWaitsOutTheInFlightPoll(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	provider := &blockingProvider{release: make(chan struct{})}
+	engine := New(database, []domain.Provider{provider}, time.Hour, 10*time.Second, 30)
+
+	polling := make(chan struct{})
+	go func() {
+		_ = engine.RefreshProvider(context.Background(), "codex")
+		close(polling)
+	}()
+	waitFor(t, func() bool { return provider.fetches.Load() == 1 })
+
+	waiting := make(chan struct{})
+	go func() {
+		if err := engine.RefreshProviderWait(context.Background(), "codex"); err != nil {
+			t.Errorf("wait refresh failed: %v", err)
+		}
+		close(waiting)
+	}()
+	// Wait must not return while the poll holds the lock: the TryLock path
+	// that silently skips would fail this wait.
+	select {
+	case <-waiting:
+		t.Fatal("RefreshProviderWait returned while the poll still holds the lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(provider.release)
+	<-polling
+	<-waiting
+	if got := provider.fetches.Load(); got != 2 {
+		t.Fatalf("expected the waited refresh to have reread, got %d fetches", got)
+	}
+}
+
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -345,6 +387,62 @@ func TestRefreshRemovesAccountsDiscoveryNoLongerReports(t *testing.T) {
 
 // A failed discovery says nothing about which accounts exist: the outage must
 // not wipe the stored rows it could not see.
+// A source that reports accounts gone drops the rows instead of pinning
+// deleted accounts as stale forever. The provider's last account is kept,
+// whichever slot survives the parallel drops.
+func TestRefreshDropsAccountsTheSourceReportsMissing(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	used := 10.0
+	seed := func(id string) {
+		t.Helper()
+		account := domain.Account{ID: id, ProviderID: "claude", Label: id, Source: "cswap"}
+		snapshot := domain.Snapshot{
+			AccountID: id, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh,
+			Windows: []domain.QuotaWindow{{ID: "five-hour", Label: "5 hours", UsedPercent: &used}},
+		}
+		if err := database.Save(ctx, account, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("claude:cswap:1")
+	seed("claude:cswap:2")
+
+	provider := discoveryProvider{
+		id: "claude",
+		candidates: []domain.AccountCandidate{
+			{ID: "claude:cswap:1", ProviderID: "claude", Label: "Claude", Ref: "1"},
+			{ID: "claude:cswap:2", ProviderID: "claude", Label: "Claude", Ref: "2"},
+		},
+		fetchErr: &domain.CodedError{Code: "account_missing", Err: errors.New("gone")},
+	}
+	engine := New(database, []domain.Provider{provider}, time.Hour, time.Second, 30)
+	if err := engine.Refresh(ctx); err == nil {
+		t.Fatal("expected refresh to report the missing accounts")
+	}
+	// The drops run in parallel; exactly one slot must survive as the
+	// provider's last account regardless of which delete ran first.
+	accounts, err := database.AccountsByProvider(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("exactly one slot must survive the drops, got %d: %#v", len(accounts), accounts)
+	}
+	survivor := accounts[0].ID
+
+	if err := engine.Refresh(ctx); err == nil {
+		t.Fatal("expected the last-account refusal to surface")
+	}
+	if _, err := database.Latest(ctx, survivor); err != nil {
+		t.Fatalf("the provider's last account must be kept, got err=%v", err)
+	}
+}
+
 func TestRefreshKeepsAccountsWhenDiscoveryFails(t *testing.T) {
 	database, err := store.Open(filepath.Join(t.TempDir(), "engine.db"))
 	if err != nil {
@@ -424,6 +522,7 @@ type discoveryProvider struct {
 	id          string
 	candidates  []domain.AccountCandidate
 	discoverErr error
+	fetchErr    error
 }
 
 func (p discoveryProvider) ID() string   { return p.id }
@@ -432,6 +531,9 @@ func (p discoveryProvider) Discover(context.Context) ([]domain.AccountCandidate,
 	return p.candidates, p.discoverErr
 }
 func (p discoveryProvider) Fetch(_ context.Context, candidate domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	if p.fetchErr != nil {
+		return domain.Account{}, domain.Snapshot{}, p.fetchErr
+	}
 	used := 42.0
 	return domain.Account{ID: candidate.ID, ProviderID: candidate.ProviderID, Label: candidate.Label},
 		domain.Snapshot{

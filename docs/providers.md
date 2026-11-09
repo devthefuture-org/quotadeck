@@ -12,7 +12,7 @@ cswap list --json
 quotadeck doctor
 ```
 
-The same action is available as **Install & set up** under **Manage plans** on the dashboard. If no cswap account exists, setup invokes `cswap add` so cswap—not QuotaDeck—imports the current Claude Code login. QuotaDeck then reads public account slots and usage data. The **Use in Claude Code** button on each quota card activates that account by calling `cswap switch <slot> --json`. It never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
+The same action is available as **Install & set up** under **Manage plans** on the dashboard. If no cswap account exists, setup invokes `cswap add` so cswap—not QuotaDeck—imports the current Claude Code login. QuotaDeck then reads public account slots and usage data. The **Use in Claude Code** button on each quota card activates that account by calling `cswap switch <slot> --json`. Claude quota cards also carry **Disable account** (`cswap disable <slot>`, holds it out of cswap rotation, reversible) and **Remove** (`cswap remove <slot>`, deletes the account and its stored credentials from cswap after a confirmation; removing the account Claude Code currently serves is refused). QuotaDeck never calls `cswap export`, opens the credential store, or refreshes Claude OAuth itself.
 
 ## Codex
 

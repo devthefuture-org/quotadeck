@@ -113,8 +113,10 @@ GET  /api/v1/events
 GET  /api/v1/control
 POST /api/v1/refresh
 POST /api/v1/control/claude/switch
+POST /api/v1/control/claude/account
 PUT  /api/v1/control/zai
 PUT  /api/v1/control/kimi
+PUT  /api/v1/control/opencode
 ```
 
 Manual refresh and plan changes are loopback-only and require QuotaDeck's explicit request header. Errors are redacted before persistence; temporary failures keep the last valid windows visible as stale. Control responses expose only secret-presence booleans, never key values.

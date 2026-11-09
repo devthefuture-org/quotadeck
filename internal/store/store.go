@@ -350,6 +350,27 @@ func (s *Store) PruneAccounts(ctx context.Context, providerID string, keep map[s
 	return result.RowsAffected()
 }
 
+// DeleteAccount removes one account row; its snapshots cascade with it.
+// Refuses the provider's last account so a transient misreport cannot wipe
+// a provider off the dashboard.
+func (s *Store) DeleteAccount(ctx context.Context, providerID, id string) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var remaining int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM accounts WHERE provider_id = ? AND id != ?", providerID, id).Scan(&remaining); err != nil {
+		return 0, fmt.Errorf("delete account: %w", err)
+	}
+	if remaining == 0 {
+		return 0, errors.New("delete account: refusing to remove the provider's last account")
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM accounts WHERE id = ? AND provider_id = ?", id, providerID)
+	if err != nil {
+		return 0, fmt.Errorf("delete account: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

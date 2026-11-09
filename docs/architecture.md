@@ -40,6 +40,7 @@ See [ADR 0002](./adr/0002-domain-model) for the decision record.
 | `POST` | `/api/v1/refresh` | Loopback-only manual refresh |
 | `POST` | `/api/v1/control/claude/setup` | Install/initialize cswap for the current user |
 | `POST` | `/api/v1/control/claude/switch` | Activate a validated cswap account |
+| `POST` | `/api/v1/control/claude/account` | Disable, re-enable or remove a cswap account (`{accountId, action}`; removing the active account returns 409) |
 | `PUT` | `/api/v1/control/zai` | Save and optionally activate Z.ai |
 | `PUT` | `/api/v1/control/kimi` | Save and optionally activate Kimi K3 |
 | `PUT` | `/api/v1/control/opencode` | Activate the local OpenCode connection with DeepSeek V4.1 Flash |

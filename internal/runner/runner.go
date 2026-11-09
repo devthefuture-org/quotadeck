@@ -21,6 +21,7 @@ type Result struct {
 type Runner interface {
 	LookPath(name string) (string, error)
 	Run(ctx context.Context, name string, args ...string) (Result, error)
+	RunWithInput(ctx context.Context, input string, name string, args ...string) (Result, error)
 }
 
 type ExecRunner struct{}
@@ -28,12 +29,22 @@ type ExecRunner struct{}
 func (ExecRunner) LookPath(name string) (string, error) { return LookPath(name) }
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) (Result, error) {
+	return ExecRunner{}.RunWithInput(ctx, "", name, args...)
+}
+
+// RunWithInput feeds input to the command's stdin. Some tools (cswap remove)
+// ask an interactive [y/N] question with no non-interactive flag: their only
+// scriptable path is a piped answer.
+func (ExecRunner) RunWithInput(ctx context.Context, input string, name string, args ...string) (Result, error) {
 	path, err := LookPath(name)
 	if err != nil {
 		return Result{}, fmt.Errorf("command not found: %w", err)
 	}
 	command := exec.CommandContext(ctx, path, args...)
 	command.Env = CommandEnvironment()
+	if input != "" {
+		command.Stdin = strings.NewReader(input)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &limitedWriter{buffer: &stdout, limit: maxOutput}
 	command.Stderr = &limitedWriter{buffer: &stderr, limit: 64 << 10}

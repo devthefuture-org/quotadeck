@@ -31,6 +31,9 @@ type fakeController struct {
 	activate          bool
 	setup             control.ClaudeSetupResult
 	setupErr          error
+	managedAccount    string
+	managedAction     string
+	accountErr        error
 }
 
 type slowUnrelatedProvider struct{}
@@ -62,6 +65,16 @@ func (f *fakeController) SwitchClaude(_ context.Context, accountID string) error
 
 func (f *fakeController) SetupClaude(context.Context) (control.ClaudeSetupResult, error) {
 	return f.setup, f.setupErr
+}
+
+func (f *fakeController) DisableClaude(_ context.Context, accountID string, disable bool) error {
+	f.managedAccount, f.managedAction = accountID, map[bool]string{true: "disable", false: "enable"}[disable]
+	return f.accountErr
+}
+
+func (f *fakeController) RemoveClaude(_ context.Context, accountID string) error {
+	f.managedAccount, f.managedAction = accountID, "remove"
+	return f.accountErr
 }
 
 func (f *fakeController) ConfigureZAI(_ context.Context, apiKey string, activate bool) error {
@@ -498,6 +511,71 @@ func TestCodexLoginUnavailableWithoutAManager(t *testing.T) {
 func (f *fakeController) ConfigureOpenCode(context.Context) error {
 	f.openCodeActivated = true
 	return f.openCodeErr
+}
+
+type fakeClaudeProvider struct{}
+
+func (fakeClaudeProvider) ID() string   { return "claude" }
+func (fakeClaudeProvider) Name() string { return "Claude" }
+
+func (fakeClaudeProvider) Discover(_ context.Context) ([]domain.AccountCandidate, error) {
+	return []domain.AccountCandidate{
+		{ID: "claude:cswap:4", ProviderID: "claude", Label: "Slot 4", Source: "cswap", Ref: "4"},
+		{ID: "claude:cswap:9", ProviderID: "claude", Label: "Active slot", Source: "cswap", Ref: "9"},
+	}, nil
+}
+
+func (fakeClaudeProvider) Fetch(_ context.Context, candidate domain.AccountCandidate) (domain.Account, domain.Snapshot, error) {
+	return domain.Account{ID: candidate.ID, ProviderID: "claude", Label: candidate.Label, Source: "cswap"},
+		domain.Snapshot{AccountID: candidate.ID, FetchedAt: time.Now().UTC(), Status: domain.StatusFresh, Windows: []domain.QuotaWindow{}}, nil
+}
+
+func TestManageClaudeAccountGuardsAndDispatch(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	engine := poller.New(database, []domain.Provider{fakeClaudeProvider{}}, time.Minute, time.Second, 30)
+	active := domain.Account{ID: "claude:cswap:9", ProviderID: "claude", Label: "Active slot", Active: true}
+	if err := database.Save(t.Context(), active, domain.Snapshot{AccountID: "claude:cswap:9", FetchedAt: time.Now().UTC(), Status: domain.StatusFresh, Windows: []domain.QuotaWindow{}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, guard, body string
+		controllerErr     error
+		wantAccount       string
+		want              int
+	}{
+		{"guard", "", `{"accountId":"claude:cswap:4","action":"remove"}`, nil, "", 403},
+		{"invalid action", "control", `{"accountId":"claude:cswap:4","action":"bogus"}`, nil, "", 400},
+		{"unknown account", "control", `{"accountId":"claude:cswap:5","action":"disable"}`, nil, "", 400},
+		{"active account remove", "control", `{"accountId":"claude:cswap:9","action":"remove"}`, nil, "", 409},
+		{"active account disable", "control", `{"accountId":"claude:cswap:9","action":"disable"}`, nil, "claude:cswap:9", 200},
+		{"active account enable", "control", `{"accountId":"claude:cswap:9","action":"enable"}`, nil, "claude:cswap:9", 200},
+		{"controller failure", "control", `{"accountId":"claude:cswap:4","action":"remove"}`, fmt.Errorf("boom"), "", 502},
+		{"remove ok", "control", `{"accountId":"claude:cswap:4","action":"remove"}`, nil, "claude:cswap:4", 200},
+		{"disable ok", "control", `{"accountId":"claude:cswap:4","action":"disable"}`, nil, "claude:cswap:4", 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &fakeController{accountErr: test.controllerErr}
+			s := New(engine, doctor.Collector{}, c)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/control/claude/account", strings.NewReader(test.body))
+			request.RemoteAddr = "127.0.0.1:4321"
+			request.Header.Set("X-QuotaDeck-Request", test.guard)
+			response := httptest.NewRecorder()
+			s.Handler().ServeHTTP(response, request)
+			if response.Code != test.want || strings.Contains(response.Body.String(), "boom") {
+				t.Fatalf("response: %d %s", response.Code, response.Body.String())
+			}
+			if test.want == 200 && (c.managedAction == "" || c.managedAccount != test.wantAccount) {
+				t.Fatalf("control was not dispatched: %#v", c)
+			}
+			if test.want == 200 && strings.Contains(response.Body.String(), `"status":"updated"`) == false {
+				t.Fatalf("unexpected body: %s", response.Body.String())
+			}
+		})
+	}
 }
 
 func TestOpenCodeActivationGuardsAndRedacts(t *testing.T) {

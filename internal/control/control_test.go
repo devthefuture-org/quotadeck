@@ -17,8 +17,10 @@ import (
 
 type fakeRunner struct {
 	args       []string
+	input      string
 	err        error
 	accounts   int
+	activeSlot int
 	paths      map[string]bool
 	installRun bool
 }
@@ -30,6 +32,11 @@ func (f *fakeRunner) LookPath(name string) (string, error) {
 	return "/bin/" + name, nil
 }
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (runner.Result, error) {
+	return f.RunWithInput(context.Background(), "", name, args...)
+}
+
+func (f *fakeRunner) RunWithInput(_ context.Context, input string, name string, args ...string) (runner.Result, error) {
+	f.input = input
 	f.args = append([]string{name}, args...)
 	if f.err != nil {
 		return runner.Result{}, f.err
@@ -45,14 +52,21 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (runner
 	}
 	if name == "cswap" && len(args) > 1 && args[0] == "list" && args[1] == "--json" {
 		accounts := make([]map[string]any, f.accounts)
-		return runner.Result{Stdout: mustJSON(accounts)}, nil
+		return runner.Result{Stdout: mustJSON(map[string]any{"schemaVersion": 1, "accounts": accounts, "activeAccountNumber": f.activeSlotOrNil()})}, nil
 	}
 	return runner.Result{Stdout: []byte(`{"schemaVersion":1}`)}, nil
 }
 
-func mustJSON(accounts []map[string]any) []byte {
-	payload, _ := json.Marshal(map[string]any{"schemaVersion": 1, "accounts": accounts})
+func mustJSON(value any) []byte {
+	payload, _ := json.Marshal(value)
 	return payload
+}
+
+func (f *fakeRunner) activeSlotOrNil() any {
+	if f.activeSlot == 0 {
+		return nil
+	}
+	return f.activeSlot
 }
 
 func testManager(t *testing.T, commandRunner runner.Runner) (*Manager, Paths) {
@@ -143,6 +157,43 @@ func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {
 	}
 	if !status.ZAI.Configured || !status.ZAI.Active || status.Mode != "zai" {
 		t.Fatalf("unexpected status: %#v", status)
+	}
+}
+
+func TestClaudeAccountActionsRunExactCswapCommands(t *testing.T) {
+	commandRunner := &fakeRunner{}
+	manager, _ := testManager(t, commandRunner)
+	if err := manager.DisableClaude(t.Context(), "claude:cswap:4", true); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(commandRunner.args, []string{"cswap", "disable", "4"}) {
+		t.Fatalf("unexpected command: %#v", commandRunner.args)
+	}
+	if err := manager.DisableClaude(t.Context(), "claude:cswap:4", false); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(commandRunner.args, []string{"cswap", "enable", "4"}) {
+		t.Fatalf("unexpected command: disable/enable must run cswap enable/disable without --json: %#v", commandRunner.args)
+	}
+	if err := manager.RemoveClaude(t.Context(), "claude:cswap:4"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(commandRunner.args, []string{"cswap", "remove", "4"}) {
+		t.Fatalf("unexpected command: remove must run list then remove without --json: %#v", commandRunner.args)
+	}
+	if commandRunner.input != "y\n" {
+		t.Fatalf("cswap remove asks an interactive [y/N]: the piped answer must be provided: %#v", commandRunner.input)
+	}
+}
+
+func TestRemoveClaudeRefusesActiveAccount(t *testing.T) {
+	commandRunner := &fakeRunner{activeSlot: 4}
+	manager, _ := testManager(t, commandRunner)
+	if err := manager.RemoveClaude(t.Context(), "claude:cswap:4"); !errors.Is(err, ErrClaudeAccountActive) {
+		t.Fatalf("removing the active account must be refused: %v", err)
+	}
+	if !reflect.DeepEqual(commandRunner.args, []string{"cswap", "list", "--json"}) {
+		t.Fatalf("no cswap mutation may run after the active guard: %#v", commandRunner.args)
 	}
 }
 
