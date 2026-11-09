@@ -83,12 +83,42 @@ func TestLocalKimiUsesRenewableHelperWithoutCopyingTokens(t *testing.T) {
 	}
 }
 
+// A Z.ai → Kimi → Claude round trip must restore the user's own env keys:
+// the Kimi sidecar is captured after Z.ai's managed keys are undone, not
+// before, or the gateway values would be replayed as "previous" preferences.
+func TestZAIToKimiToClaudeRoundTripRestoresEnv(t *testing.T) {
+	clearPlanKeys(t)
+	commandRunner := &fakeRunner{}
+	manager, paths := testManager(t, commandRunner)
+	original := map[string]any{"env": map[string]any{
+		"KEEP_ME": "yes", "API_TIMEOUT_MS": "120000",
+		claudeAiConnectorsSwitch: "true",
+	}}
+	if err := writeSettings(paths.ClaudeSettings, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "zai-roundtrip-key", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureKimi(t.Context(), "kimi-roundtrip-key", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchClaude(t.Context(), "claude:cswap:2"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := readSettings(paths.ClaudeSettings)
+	if !reflect.DeepEqual(restored, original) {
+		t.Fatalf("preferences not restored after Z.ai → Kimi → Claude: %#v", restored)
+	}
+}
+
 func TestKimiSaveActivateAndReturnToClaude(t *testing.T) {
 	clearPlanKeys(t)
 	commandRunner := &fakeRunner{}
 	manager, paths := testManager(t, commandRunner)
 	original := map[string]any{"permissions": map[string]any{"defaultMode": "plan"}, "env": map[string]any{
 		"ANTHROPIC_MODEL": "opus", "KEEP_ME": "yes", "CLAUDE_CODE_EFFORT_LEVEL": "medium",
+		claudeAiConnectorsSwitch: "true",
 	}}
 	if err := writeSettings(paths.ClaudeSettings, original, 0o600); err != nil {
 		t.Fatal(err)
@@ -119,6 +149,9 @@ func TestKimiSaveActivateAndReturnToClaude(t *testing.T) {
 	}
 	if env["CLAUDE_CODE_AUTO_MODE_SERVER"] != "0" || env["CLAUDE_CODE_AUTO_MODE_MODEL"] != "k3" {
 		t.Fatalf("auto mode classifier was not pinned to the Kimi endpoint: %#v", env)
+	}
+	if env[claudeAiConnectorsSwitch] != claudeAiConnectorsOff {
+		t.Fatalf("claude.ai connectors must stay off behind the Kimi gateway: %#v", env)
 	}
 	status := manager.Status(nil)
 	encoded, _ := json.Marshal(status)

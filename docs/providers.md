@@ -70,11 +70,11 @@ The selected Claude account is highlighted, and the current plan remains visible
 
 Selecting a Claude subscription removes the active Z.ai or Kimi routing from Claude Code settings, restores model preferences overridden by Kimi, preserves unrelated settings, and delegates credential activation to `cswap`. If `cswap` fails, QuotaDeck restores the original settings file.
 
-For Z.ai, open **Manage plans**, paste the API key once, then choose **Save & use Z.ai**. Later, use the button beside its quotas to select the stored key. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start).
+For Z.ai, open **Manage plans**, paste the API key once, then choose **Save & use Z.ai**. Later, use the button beside its quotas to select the stored key. QuotaDeck writes the private service environment and configures Claude Code's official Anthropic-compatible endpoint in `~/.claude/settings.json`. Both files are created with user-only permissions, and the key is never returned by the HTTP API. The endpoint follows the [official Z.ai Claude Code setup](https://docs.z.ai/devpack/quick-start). Like every gateway plan, activating Z.ai sets `ENABLE_CLAUDEAI_MCP_SERVERS=false` so replayed session history stays free of Anthropic-native MCP blocks.
 
 For Kimi, a local Kimi Code login is detected automatically from its `config.toml` and file-backed OAuth credentials. Choose **Use Kimi K3 in Claude Code** beside the quotas, or **Use Kimi K3** in **Manage plans**, without entering a key. QuotaDeck follows the configured mainland/global region and installs a Claude Code `apiKeyHelper` that reads and renews the local credential. The helper checks the store on each call; refreshes use the same directory lock as Kimi Code and atomically update its private credential file. OAuth tokens are never copied into Claude settings or the QuotaDeck environment file. If the login has been revoked, run `kimi login` again.
 
-API keys remain supported: paste one in **Manage plans**, or supply `KIMI_API_KEY` / `KIMI_CODING_API_KEY`. A configured API key takes precedence over the local OAuth login. The integration follows the [official Kimi Claude Code setup](https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html), using the requested `k3` model with a 256K context cap for compatibility across K3 subscription tiers. Switching between Kimi and Z.ai preserves their keys for later selection.
+API keys remain supported: paste one in **Manage plans**, or supply `KIMI_API_KEY` / `KIMI_CODING_API_KEY`. A configured API key takes precedence over the local OAuth login. The integration follows the [official Kimi Claude Code setup](https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html), using the requested `k3` model with a 256K context cap for compatibility across K3 subscription tiers. Switching between Kimi and Z.ai preserves their keys for later selection. Like every gateway plan, activating Kimi sets `ENABLE_CLAUDEAI_MCP_SERVERS=false` so replayed session history stays free of Anthropic-native MCP blocks.
 
 The selection applies to new Claude Code processes. Existing sessions retain the environment with which they started.
 
@@ -98,6 +98,18 @@ alias for all model tiers and subagents. Go does not currently expose the dated
 `https://opencode.ai/inference/go/anthropic`. DeepSeek requires the **Global**
 region in the workspace's Console privacy settings; QuotaDeck never changes that
 setting automatically.
+
+The Go gateway is a translated target, not a native Anthropic Messages endpoint:
+it rejects Anthropic-native MCP content (`mcp_tool_use`, `mcp_tool_result`) that
+claude.ai connectors produce while a session runs against a native Anthropic
+endpoint. Continuing such a session behind Go fails with `400 … requires a native
+Anthropic Messages target`; restarting the session (new tab) clears it. So that
+sessions stay portable, QuotaDeck sets `ENABLE_CLAUDEAI_MCP_SERVERS=false`
+behind every gateway plan (OpenCode, Z.ai, Kimi): claude.ai connectors no longer
+auto-load there and history keeps plain `tool_use` blocks. If a gateway also
+refuses other beta-only block types, Claude Code already retries without
+`tool_reference` (2.1.305+) and the extra switches `ENABLE_TOOL_SEARCH=false`
+and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` remove them at the source.
 
 Claude Code uses `quotadeck credential opencode` as its credential helper. The
 selected connection is pinned by ID; switching or removing it in OpenCode does

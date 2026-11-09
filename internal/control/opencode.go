@@ -23,6 +23,7 @@ var openCodeEnvironment = map[string]string{
 	"CLAUDE_CODE_SUBAGENT_MODEL":        opencode.Model,
 	"CLAUDE_CODE_AUTO_MODE_SERVER":      "0",
 	"CLAUDE_CODE_AUTO_MODE_MODEL":       opencode.Model,
+	claudeAiConnectorsSwitch:            claudeAiConnectorsOff,
 	"CLAUDE_CODE_EFFORT_LEVEL":          "high",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW":   "1000000",
 	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":    "1000000",
@@ -74,7 +75,9 @@ func (m *Manager) ConfigureOpenCode(ctx context.Context) error {
 	if _, err = m.disableKimi(settings); err != nil {
 		return err
 	}
-	disableZAI(settings)
+	if _, err = m.disableZAI(settings); err != nil {
+		return err
+	}
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
 		return err

@@ -33,6 +33,14 @@ const (
 // Code's own classifier requests, which gateways serve like any other call.
 const autoModeServerSwitch = "CLAUDE_CODE_AUTO_MODE_SERVER"
 
+// claude.ai connectors auto-load remote MCP servers whose responses carry
+// Anthropic-native mcp_tool_use blocks. Translated gateway targets reject
+// those blocks (opencode-go answers "requires a native Anthropic Messages
+// target"), so behind a gateway the session history must stay plain
+// tool_use: "false" stops the automatic connector loading.
+const claudeAiConnectorsSwitch = "ENABLE_CLAUDEAI_MCP_SERVERS"
+const claudeAiConnectorsOff = "false"
+
 var (
 	ErrInvalidAccount        = errors.New("invalid Claude account")
 	ErrInvalidKey            = errors.New("invalid Z.ai API key")
@@ -217,7 +225,11 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	changed = otherChanged || disableZAI(settings) || changed
+	zaiChanged, err := m.disableZAI(settings)
+	if err != nil {
+		return err
+	}
+	changed = otherChanged || zaiChanged || changed
 	if changed {
 		if err := writeSettings(m.paths.ClaudeSettings, settings, snapshot.mode); err != nil {
 			return fmt.Errorf("disable API plan for Claude Code: %w", err)
@@ -331,7 +343,7 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 	if err != nil {
 		return fmt.Errorf("read Claude settings: %w", err)
 	}
-	_, settingsKey := zaiSettings(settings)
+	wasActive, settingsKey := zaiSettings(settings)
 	effectiveKey := firstNonEmpty(apiKey, readEnvironmentValue(m.paths.Environment, "ZAI_API_KEY"), os.Getenv("ZAI_API_KEY"), settingsKey)
 	if effectiveKey == "" {
 		return ErrZAINotConfigured
@@ -347,6 +359,11 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 	}
 	if _, err := m.disableOpenCode(settings); err != nil {
 		return err
+	}
+	if !wasActive {
+		if err := m.preserveZAIKeys(settings); err != nil {
+			return err
+		}
 	}
 	if err := enableZAI(settings, effectiveKey); err != nil {
 		return fmt.Errorf("update Claude settings: %w", err)
@@ -440,6 +457,15 @@ func recognizedZAI(raw string) bool {
 	return host == "api.z.ai" || host == "z.ai" || strings.HasSuffix(host, ".z.ai") || host == "open.bigmodel.cn" || strings.HasSuffix(host, ".bigmodel.cn")
 }
 
+// zaiManagedEnvironment lists the fixed-value env keys enableZAI writes.
+// disableZAI restores the user's previous value for each key the user has
+// not changed after activating Z.ai.
+var zaiManagedEnvironment = map[string]string{
+	"API_TIMEOUT_MS":         managedTimeout,
+	autoModeServerSwitch:     "0",
+	claudeAiConnectorsSwitch: claudeAiConnectorsOff,
+}
+
 func enableZAI(settings map[string]any, apiKey string) error {
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
@@ -448,32 +474,68 @@ func enableZAI(settings map[string]any, apiKey string) error {
 	environment["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	delete(environment, "ANTHROPIC_API_KEY")
 	environment["ANTHROPIC_BASE_URL"] = zaiEndpoint
-	environment["API_TIMEOUT_MS"] = managedTimeout
-	environment[autoModeServerSwitch] = "0"
+	for name, value := range zaiManagedEnvironment {
+		environment[name] = value
+	}
 	return nil
 }
 
-func disableZAI(settings map[string]any) bool {
+func (m *Manager) preserveZAIKeys(settings map[string]any) error {
+	if _, err := os.Stat(m.zaiPreferencesPath()); err == nil {
+		// The sidecar holds the preferences from before the FIRST activation:
+		// a later activation sees env values that may already be managed ones.
+		return nil
+	}
+	environment, err := settingsEnvironment(settings)
+	if err != nil {
+		return err
+	}
+	previous := map[string]any{}
+	for name := range zaiManagedEnvironment {
+		if value, exists := environment[name]; exists {
+			previous[name] = value
+		}
+	}
+	if err := writeSettings(m.zaiPreferencesPath(), previous, 0o600); err != nil {
+		return fmt.Errorf("preserve Claude environment preferences: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) zaiPreferencesPath() string {
+	return m.paths.ClaudeSettings + ".quotadeck-zai.json"
+}
+
+func (m *Manager) disableZAI(settings map[string]any) (bool, error) {
 	environment, ok := settings["env"].(map[string]any)
 	if !ok {
-		return false
+		return false, nil
 	}
 	baseURL, _ := environment["ANTHROPIC_BASE_URL"].(string)
 	if !recognizedZAI(baseURL) {
-		return false
+		return false, nil
+	}
+	previous, err := readSettings(m.zaiPreferencesPath())
+	if err != nil {
+		return false, fmt.Errorf("read Claude environment preferences: %w", err)
 	}
 	delete(environment, "ANTHROPIC_AUTH_TOKEN")
 	delete(environment, "ANTHROPIC_BASE_URL")
-	if timeout, _ := environment["API_TIMEOUT_MS"].(string); timeout == managedTimeout {
-		delete(environment, "API_TIMEOUT_MS")
-	}
-	if value, _ := environment[autoModeServerSwitch].(string); value == "0" {
-		delete(environment, autoModeServerSwitch)
+	for name, managed := range zaiManagedEnvironment {
+		// Keep changes the user made after activating Z.ai.
+		if value, _ := environment[name].(string); value != managed {
+			continue
+		}
+		if old, exists := previous[name]; exists {
+			environment[name] = old
+		} else {
+			delete(environment, name)
+		}
 	}
 	if len(environment) == 0 {
 		delete(settings, "env")
 	}
-	return true
+	return true, nil
 }
 
 type fileState struct {

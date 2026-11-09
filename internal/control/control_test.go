@@ -65,6 +65,40 @@ func testManager(t *testing.T, commandRunner runner.Runner) (*Manager, Paths) {
 	return New("cswap", commandRunner, paths).WithKimiHomes([]string{root}).WithOpenCode(config.OpenCodeConfig{DatabasePath: filepath.Join(root, "opencode.db"), StatePath: root}), paths
 }
 
+// A pre-existing Z.ai sidecar holds the preferences from before the FIRST
+// activation: a later activation must not clobber it with env values that may
+// already be managed ones.
+func TestConfigureZAIKeepsExistingSidecar(t *testing.T) {
+	clearPlanKeys(t)
+	manager, paths := testManager(t, &fakeRunner{})
+	if err := writeSettings(paths.ClaudeSettings, map[string]any{"env": map[string]any{
+		"KEEP_ME": "yes", claudeAiConnectorsSwitch: "false", "API_TIMEOUT_MS": managedTimeout,
+	}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSettings(manager.zaiPreferencesPath(), map[string]any{"ENABLE_CLAUDEAI_MCP_SERVERS": "true", "API_TIMEOUT_MS": "120000"}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "zai-again-key", true); err != nil {
+		t.Fatal(err)
+	}
+	sidecar, err := readSettings(manager.zaiPreferencesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sidecar["ENABLE_CLAUDEAI_MCP_SERVERS"] != "true" {
+		t.Fatalf("re-activation clobbered the existing sidecar: %#v", sidecar)
+	}
+	if err := manager.SwitchClaude(t.Context(), "claude:cswap:2"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := readSettings(paths.ClaudeSettings)
+	environment, _ := settingsEnvironment(restored)
+	if environment[claudeAiConnectorsSwitch] != "true" {
+		t.Fatalf("the original preference must survive the round trip: %#v", environment)
+	}
+}
+
 func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 	manager, paths := testManager(t, &fakeRunner{})
@@ -96,8 +130,8 @@ func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {
 	if !active || key != secret {
 		t.Fatalf("Z.ai settings were not activated")
 	}
-	if environment, _ := settings["env"].(map[string]any); environment[autoModeServerSwitch] != "0" {
-		t.Fatalf("Z.ai activation must keep auto mode on Claude Code's own classifier: %#v", environment)
+	if environment, _ := settings["env"].(map[string]any); environment[autoModeServerSwitch] != "0" || environment[claudeAiConnectorsSwitch] != claudeAiConnectorsOff {
+		t.Fatalf("Z.ai activation must keep auto mode on Claude Code's own classifier and claude.ai connectors off: %#v", environment)
 	}
 	status := manager.Status(nil)
 	body, err := json.Marshal(status)
@@ -117,11 +151,12 @@ func TestSwitchClaudeDisablesZAIAndRunsExactSlot(t *testing.T) {
 	commandRunner := &fakeRunner{}
 	manager, paths := testManager(t, commandRunner)
 	settings := map[string]any{"theme": "dark", "env": map[string]any{
-		"ANTHROPIC_AUTH_TOKEN": "existing-zai-key",
-		"ANTHROPIC_BASE_URL":   zaiEndpoint,
-		"API_TIMEOUT_MS":       managedTimeout,
-		autoModeServerSwitch:   "0",
-		"KEEP_ME":              "yes",
+		"ANTHROPIC_AUTH_TOKEN":   "existing-zai-key",
+		"ANTHROPIC_BASE_URL":     zaiEndpoint,
+		"API_TIMEOUT_MS":         managedTimeout,
+		autoModeServerSwitch:     "0",
+		claudeAiConnectorsSwitch: claudeAiConnectorsOff,
+		"KEEP_ME":                "yes",
 	}}
 	if err := writeSettings(paths.ClaudeSettings, settings, 0o600); err != nil {
 		t.Fatal(err)
@@ -137,7 +172,7 @@ func TestSwitchClaudeDisablesZAIAndRunsExactSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := updated["env"].(map[string]any)
-	if environment["KEEP_ME"] != "yes" || environment["ANTHROPIC_AUTH_TOKEN"] != nil || environment["ANTHROPIC_BASE_URL"] != nil || environment[autoModeServerSwitch] != nil {
+	if environment["KEEP_ME"] != "yes" || environment["ANTHROPIC_AUTH_TOKEN"] != nil || environment["ANTHROPIC_BASE_URL"] != nil || environment[autoModeServerSwitch] != nil || environment[claudeAiConnectorsSwitch] != nil {
 		t.Fatalf("unexpected settings: %#v", updated)
 	}
 	if key := readEnvironmentValue(paths.Environment, "ZAI_API_KEY"); key != "existing-zai-key" {

@@ -37,7 +37,7 @@ func TestOpenCodeRoundTripRestoresModelsAndHelper(t *testing.T) {
 			t.Setenv("KIMI_CODING_API_KEY", "")
 			m, paths := testManager(t, &fakeRunner{})
 			prepareOpenCode(t, m)
-			original := map[string]any{"apiKeyHelper": "original-helper", "env": map[string]any{"ANTHROPIC_MODEL": "original-model", "ANTHROPIC_CUSTOM_HEADERS": "x-example: retained", "OTHER": "keep"}}
+			original := map[string]any{"apiKeyHelper": "original-helper", "env": map[string]any{"ANTHROPIC_MODEL": "original-model", "ANTHROPIC_CUSTOM_HEADERS": "x-example: retained", "OTHER": "keep", claudeAiConnectorsSwitch: "true"}}
 			if err := writeSettings(paths.ClaudeSettings, original, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -56,6 +56,9 @@ func TestOpenCodeRoundTripRestoresModelsAndHelper(t *testing.T) {
 			env, _ := settingsEnvironment(settings)
 			if env["ANTHROPIC_MODEL"] != opencode.Model || env["ANTHROPIC_AUTH_TOKEN"] != "" || !openCodeActive(settings) {
 				t.Fatal("OpenCode not fully configured")
+			}
+			if env[claudeAiConnectorsSwitch] != claudeAiConnectorsOff {
+				t.Fatalf("claude.ai connectors must stay off behind the OpenCode gateway: %#v", env)
 			}
 			raw, _ := json.Marshal([]any{settings, m.Status(nil)})
 			if strings.Contains(string(raw), "opencode-access-secret") || strings.Contains(string(raw), "opencode-refresh-secret") {

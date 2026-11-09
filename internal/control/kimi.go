@@ -16,7 +16,9 @@ const kimiEndpoint = "https://api.kimi.com/coding/"
 // membership tiers whose K3 requests do not support the full 1M context.
 // https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html
 // Auto mode's gateway classifier also runs on K3: the Kimi endpoint returns
-// no verdict for the server-side review (see autoModeServerSwitch).
+// no verdict for the server-side review (see autoModeServerSwitch). The
+// claude.ai connector switch keeps replayed history free of Anthropic-native
+// MCP blocks (see claudeAiConnectorsSwitch).
 var kimiEnvironment = map[string]string{
 	"ANTHROPIC_MODEL":                   "k3",
 	"ANTHROPIC_SMALL_FAST_MODEL":        "k3",
@@ -27,6 +29,7 @@ var kimiEnvironment = map[string]string{
 	"CLAUDE_CODE_SUBAGENT_MODEL":        "k3",
 	"CLAUDE_CODE_AUTO_MODE_SERVER":      "0",
 	"CLAUDE_CODE_AUTO_MODE_MODEL":       "k3",
+	claudeAiConnectorsSwitch:            claudeAiConnectorsOff,
 	"CLAUDE_CODE_EFFORT_LEVEL":          "high",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW":   "262144",
 	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":    "262144",
@@ -132,6 +135,11 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 	if _, err := m.disableOpenCode(settings); err != nil {
 		return err
 	}
+	// Undo the previous gateway before capturing the sidecar: its disable
+	// restores the user's own values, which is what "previous" must hold.
+	if _, err := m.disableZAI(settings); err != nil {
+		return err
+	}
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
 		return err
@@ -153,8 +161,6 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 			return fmt.Errorf("preserve Claude model preferences: %w", err)
 		}
 	}
-	disableZAI(settings)
-	environment, _ = settingsEnvironment(settings)
 	delete(environment, "ANTHROPIC_AUTH_TOKEN")
 	if helper != "" {
 		// Empty settings values override keys inherited from the launching
