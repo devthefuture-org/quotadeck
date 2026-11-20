@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/devthefuture-org/quotadeck/internal/chatgpt"
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
 	"github.com/devthefuture-org/quotadeck/internal/domain"
@@ -27,12 +29,14 @@ import (
 var uiFiles embed.FS
 
 type Server struct {
-	engine      *poller.Engine
-	doctor      doctor.Collector
-	controller  Controller
-	codexLogins CodexLogins
-	startedAt   time.Time
-	handler     http.Handler
+	engine         *poller.Engine
+	doctor         doctor.Collector
+	controller     Controller
+	codexLogins    CodexLogins
+	chatGPT        *chatgpt.Manager
+	chatGPTControl sync.Mutex
+	startedAt      time.Time
+	handler        http.Handler
 }
 
 type Controller interface {
@@ -44,6 +48,8 @@ type Controller interface {
 	ConfigureZAI(ctx context.Context, apiKey string, activate bool) error
 	ConfigureKimi(ctx context.Context, apiKey string, activate bool) error
 	ConfigureOpenCode(ctx context.Context) error
+	ConfigureChatGPT(catalog []chatgpt.Model, classifier *string) error
+	DeactivateChatGPT() error
 }
 
 // CodexLogins runs Codex sign-in sessions. They outlive the request that starts
@@ -74,6 +80,12 @@ func (s *Server) WithCodexLogins(logins CodexLogins) *Server {
 
 func (s *Server) Handler() http.Handler { return s.handler }
 
+func (s *Server) WithChatGPT(manager *chatgpt.Manager) *Server {
+	s.chatGPT = manager
+	s.handler = s.routes()
+	return s
+}
+
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/state", s.state)
@@ -94,6 +106,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/control/codex/login", s.startCodexLogin)
 	mux.HandleFunc("GET /api/v1/control/codex/login", s.codexLoginStatus)
 	mux.HandleFunc("DELETE /api/v1/control/codex/login/{loginId}", s.cancelCodexLogin)
+	mux.HandleFunc("GET /api/v1/control/chatgpt", s.chatGPTStatus)
+	mux.HandleFunc("POST /api/v1/control/chatgpt", s.startChatGPTLogin)
+	mux.HandleFunc("PUT /api/v1/control/chatgpt", s.configureChatGPT)
+	mux.HandleFunc("DELETE /api/v1/control/chatgpt", s.disconnectChatGPT)
+	mux.HandleFunc("DELETE /api/v1/control/chatgpt/login", s.cancelChatGPTLogin)
+	mux.HandleFunc("GET /api/v1/control/chatgpt/models", s.chatGPTModels)
+	mux.HandleFunc("POST "+chatgpt.GatewayPath+"/v1/messages", s.chatGPTMessages)
 	mux.Handle("/", spaHandler())
 	return securityHeaders(mux)
 }

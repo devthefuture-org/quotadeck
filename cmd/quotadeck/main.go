@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/devthefuture-org/quotadeck/internal/application"
+	"github.com/devthefuture-org/quotadeck/internal/chatgpt"
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
@@ -42,6 +44,8 @@ func run(args []string) error {
 		return serve(args[1:])
 	case "doctor":
 		return doctorCommand(args[1:])
+	case "claude":
+		return claudeCommand(args[1:])
 	case "status":
 		return apiCommand(args[1:], false)
 	case "refresh":
@@ -66,6 +70,22 @@ func run(args []string) error {
 // The credential is emitted only on this explicit helper command's stdout,
 // consumed directly by Claude Code. Never include it in diagnostics or HTTP.
 func credentialCommand(args []string) error {
+	if len(args) > 0 && args[0] == "chatgpt" {
+		flags := flag.NewFlagSet("credential chatgpt", flag.ContinueOnError)
+		database := flags.String("database", "", "QuotaDeck database path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *database == "" || flags.NArg() != 0 {
+			return errors.New("credential chatgpt requires --database")
+		}
+		key, err := chatgpt.GatewayKey(config.ExpandPath(*database))
+		if err != nil {
+			return chatgpt.ErrNotConnected
+		}
+		_, err = fmt.Fprintln(os.Stdout, key)
+		return err
+	}
 	if len(args) > 0 && args[0] == "opencode" {
 		flags := flag.NewFlagSet("credential opencode", flag.ContinueOnError)
 		database := flags.String("database", "", "OpenCode v2 database")
@@ -93,7 +113,7 @@ func credentialCommand(args []string) error {
 	}
 
 	if len(args) == 0 || args[0] != "kimi" {
-		return errors.New("credential requires kimi or opencode")
+		return errors.New("credential requires chatgpt, kimi or opencode")
 	}
 	flags := flag.NewFlagSet("credential kimi", flag.ContinueOnError)
 	home := flags.String("home", "~/.kimi-code", "Kimi Code home")
@@ -175,7 +195,7 @@ func serve(args []string) error {
 		return err
 	}
 	defer runtime.Close()
-	address := cfg.Server.Bind + ":" + strconv.Itoa(cfg.Server.Port)
+	address := net.JoinHostPort(cfg.Server.Bind, strconv.Itoa(cfg.Server.Port))
 	server := &http.Server{
 		Addr: address, Handler: runtime.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second,
@@ -323,6 +343,7 @@ Usage:
   quotadeck serve [--bind 127.0.0.1] [--port 9211]
   quotadeck doctor [--json]
   quotadeck setup cswap
+  quotadeck claude [--model MODEL] [-- CLAUDE_ARGS...]
   quotadeck refresh
   quotadeck status [--json]
   quotadeck service install --user

@@ -132,6 +132,9 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 	if err := m.preservePlanKeys(settings); err != nil {
 		return err
 	}
+	if _, err := m.disableChatGPT(settings); err != nil {
+		return err
+	}
 	if _, err := m.disableOpenCode(settings); err != nil {
 		return err
 	}

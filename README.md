@@ -32,6 +32,18 @@ Choose **System**, **Light**, or **Dark** in the dashboard header. The theme pre
 
 The dashboard also controls which plan new Claude Code sessions use. Compare consumption and reset times, then choose **Use in Claude Code** directly on a Claude account card. Z.ai GLM Coding Plan, Kimi K3 and OpenCode Go (DeepSeek V4.1 Flash) can be activated alongside their quotas. Kimi can reuse the local Kimi Code login and renew it automatically, without a separate API key. **Manage plans** opens setup for these providers without leaving the dashboard or editing configuration files. When `cswap` is absent, QuotaDeck can install the supported `claude-swap` package with `uv` or `pipx` and add the current Claude Code login.
 
+### ChatGPT plan in Claude Code (prototype)
+
+With the QuotaDeck server running, open **Manage plans → ChatGPT plan → Continue with ChatGPT** and authorize plan usage in your browser. Click **Use ChatGPT in Claude Code** to configure new Claude Code sessions, including the editor extension. Select another plan to switch back. Keep the QuotaDeck server running while using the ChatGPT plan.
+
+When GPT-6.2 Astra is available on your plan, choose it in Claude Code with `/model fable`. QuotaDeck uses the plan catalog to configure the auto-compact window for each model and exposes the same windows to hooks as a JSON map in `QUOTADECK_CHATGPT_CONTEXT_WINDOWS`. Per-model auto-compact settings require Claude Code 2.1.288 or later. Use **Reapply ChatGPT settings** to refresh the catalog for an active plan, then restart an open editor session to load the new settings.
+
+Use **Auto mode classifier** in the ChatGPT plan panel to choose the model that checks permissions. The default is GPT-6 Luna if available, or the default conversation model otherwise. The setting applies separately from the conversation model and also works with `quotadeck claude`. It requires Claude Code 2.1.302 or later.
+
+For a single standalone session, run `quotadeck claude` from your project directory. To pick a model, use `quotadeck claude --model MODEL`. Pass Claude Code options after `--`. Use the same QuotaDeck configuration for the server and launcher.
+
+QuotaDeck sends inference to OpenAI Responses using the plan permission you granted. Streaming and local tools such as Read and Edit are supported. Anthropic-hosted tools require a Claude connection. The dashboard counts completed Responses requests while the server is running, and ChatGPT **Settings → Usage** shows plan usage. Use **Disconnect** in QuotaDeck to revoke the connection.
+
 ## Install
 
 Download the latest assets from [GitHub Releases](https://github.com/devthefuture-org/quotadeck/releases/latest).

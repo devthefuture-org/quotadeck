@@ -70,6 +70,12 @@ test('Kimi K3 is identified as the selected Claude Code plan', () => {
     assert.equal(applet._selectedPlanLabel([item]), 'Kimi · Coding Plan');
 });
 
+test('ChatGPT displays the selected Claude Code model', () => {
+    const { applet } = fixture();
+    applet._control = { mode: 'chatgpt', chatgpt: { active: true, model: 'gpt-6.2-sol' } };
+    assert.equal(applet._selectedPlanLabel([]), 'ChatGPT · gpt-6.2-sol');
+});
+
 test('expired reset times are not presented as future countdowns', () => {
     const { applet } = fixture();
     assert.equal(applet._formatReset(new Date(Date.now() - 10 * 3600000).toISOString()),

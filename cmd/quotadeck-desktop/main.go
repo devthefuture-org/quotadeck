@@ -48,7 +48,7 @@ func main() {
 		if err := loadManagedEnvironment(paths.Environment); err != nil {
 			log.Printf("quotadeck-desktop: load managed environment: %v", err)
 		}
-		appRuntime, err = application.New(cfg, configPath, version)
+		appRuntime, err = application.NewInProcess(cfg, configPath, version)
 		if err != nil {
 			log.Fatalf("quotadeck-desktop: start fallback runtime: %v", err)
 		}

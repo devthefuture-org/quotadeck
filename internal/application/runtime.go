@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devthefuture-org/quotadeck/internal/chatgpt"
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
@@ -28,6 +29,7 @@ type Runtime struct {
 	database *store.Store
 	engine   *poller.Engine
 	logins   *codex.LoginManager
+	chatGPT  *chatgpt.Manager
 	handler  http.Handler
 
 	startOnce sync.Once
@@ -37,7 +39,17 @@ type Runtime struct {
 }
 
 func New(cfg config.Config, configPath, version string) (*Runtime, error) {
-	database, err := store.Open(config.ExpandPath(cfg.Storage.Database))
+	return newRuntime(cfg, configPath, version, true)
+}
+
+// NewInProcess serves a desktop WebView without a loopback HTTP listener.
+func NewInProcess(cfg config.Config, configPath, version string) (*Runtime, error) {
+	return newRuntime(cfg, configPath, version, false)
+}
+
+func newRuntime(cfg config.Config, configPath, version string, hasListener bool) (*Runtime, error) {
+	databasePath := config.ExpandPath(cfg.Storage.Database)
+	database, err := store.Open(databasePath)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +63,12 @@ func New(cfg config.Config, configPath, version string) (*Runtime, error) {
 		runner.ExecRunner{},
 		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
 	).WithKimiHomes(cfg.Providers.Kimi.HomePaths).WithOpenCode(cfg.Providers.OpenCode)
-	api := httpapi.New(engine, collector, controller)
-	runtime := &Runtime{database: database, engine: engine}
+	if hasListener {
+		controller.WithChatGPT(chatgpt.ClaudeEndpoint(cfg.Server.Bind, cfg.Server.Port), databasePath)
+	}
+	chatGPT := chatgpt.New(databasePath)
+	api := httpapi.New(engine, collector, controller).WithChatGPT(chatGPT)
+	runtime := &Runtime{database: database, engine: engine, chatGPT: chatGPT}
 	if codexProvider != nil {
 		// The manager takes the provider itself, so a sign-in can never run a
 		// different Codex binary than the one Fetch polls with, and both share
@@ -93,6 +109,7 @@ func (r *Runtime) Close() error {
 		if r.logins != nil {
 			r.logins.Close()
 		}
+		r.chatGPT.Close()
 		r.closeErr = r.database.Close()
 	})
 	return r.closeErr

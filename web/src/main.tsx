@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { useTheme } from './theme'
 import { CodexSignIn } from './codexSignIn'
+import { ChatGPTPlan, type ChatGPTSelection } from './chatgptPlan'
 import './styles.css'
 
 type Provider = { id: string; name: string; enabled: boolean; source: string }
@@ -43,11 +44,12 @@ type Snapshot = {
 type AccountState = { account: Account; snapshot: Snapshot }
 type StateResponse = { generatedAt: string; providers: Provider[]; accounts: AccountState[] }
 type ControlState = {
-  mode: 'claude' | 'zai' | 'kimi' | 'opencode' | 'unknown'
+  mode: 'claude' | 'zai' | 'kimi' | 'opencode' | 'chatgpt' | 'unknown'
   claude: { available: boolean; activeAccountId?: string }
   zai: { configured: boolean; active: boolean; endpoint: string }
   opencode: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
   kimi: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
+  chatgpt?: ChatGPTSelection
 }
 type DoctorReport = {
   version: string
@@ -61,7 +63,7 @@ type DoctorReport = {
 const providerOrder: Record<string, number> = { claude: 0, zai: 1, codex: 2, kimi: 3, opencode: 4 }
 const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex', zai: 'Z.ai', kimi: 'Kimi', opencode: 'OpenCode Go' }
 type APIPlan = 'zai' | 'kimi'
-type SelectablePlan = APIPlan | 'opencode'
+type SelectablePlan = APIPlan | 'opencode' | 'chatgpt'
 const apiPlans = {
   opencode: { label: 'OpenCode Go', glyph: 'O', description: 'DeepSeek V4.1 Flash for Claude Code' },
   zai: { label: 'Z.ai', glyph: 'Z', description: 'GLM Coding Plan for Claude Code', endpoint: 'https://api.z.ai/api/anthropic', keyURL: 'https://z.ai/manage-apikey/apikey-list' },
@@ -108,6 +110,7 @@ function App() {
   const selectedPlan = !control ? 'Plan selection unavailable'
     : control.mode === 'zai' ? 'Z.ai · GLM Coding Plan'
     : control.mode === 'opencode' ? 'OpenCode Go · DeepSeek V4.1 Flash'
+    : control.mode === 'chatgpt' ? ['ChatGPT', control.chatgpt?.model].filter(Boolean).join(' · ')
     : control.mode === 'kimi' ? `Kimi · ${control.kimi?.model === 'k3' ? 'K3' : control.kimi?.model || 'Coding Plan'}`
     : control.mode === 'claude' ? [selectedAccount?.label || 'Claude subscription', selectedAccount?.plan].filter(Boolean).join(' · ')
     : 'No plan selected'
@@ -300,7 +303,7 @@ function App() {
           {state && state.accounts.length === 0 && (
             <section class="empty-state">
               <span>◇</span><h3>No quota source detected yet</h3>
-              <p>Use Manage plans to set up Claude, Z.ai, Kimi or OpenCode Go, or open diagnostics to inspect available quota sources.</p>
+              <p>Use Manage plans to set up a plan, or open diagnostics to inspect available quota sources.</p>
               <button class="refresh-button" onClick={() => setView('diagnostics')}>Open diagnostics</button>
             </section>
           )}
@@ -454,8 +457,10 @@ function usePlanControl(onChanged: (next: ControlState) => Promise<void>) {
       activate ? 'Plan selection updated. New Claude Code sessions will use it.' : `${apiPlans[provider].label} API key saved.`)
   }
 
-  function selectAPIPlan(provider: SelectablePlan) {
-    return request(`/api/v1/control/${provider}`, 'PUT', provider === 'opencode' ? { activate: true } : { apiKey: '', activate: true }, `${provider}-activate`)
+  function selectAPIPlan(provider: SelectablePlan, classifierModel?: string) {
+    const body = provider === 'chatgpt' ? { activate: true, classifierModel }
+      : provider === 'opencode' ? { activate: true } : { apiKey: '', activate: true }
+    return request(`/api/v1/control/${provider}`, 'PUT', body, `${provider}-activate`)
   }
 
   return { apiKeys, setAPIKey, apiKeyInputs, busy, message, error, selectClaude, manageClaude, setupClaude, configureAPIPlan, selectAPIPlan }
@@ -467,6 +472,7 @@ function PlanSetup({ state, control, plans }: { state: StateResponse | null; con
 
   return (
     <section class="plan-layout" aria-label="Plan setup">
+      <ChatGPTPlan selection={control?.chatgpt} planBusy={busy} onUse={classifier => void plans.selectAPIPlan('chatgpt', classifier)} />
       <section class="plan-panel">
         <div class="plan-heading">
           <div><span class="provider-glyph claude">C</span><div><p>Claude subscriptions</p><small>Accounts managed by cswap</small></div></div>

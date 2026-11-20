@@ -72,6 +72,9 @@ func (m *Manager) ConfigureOpenCode(ctx context.Context) error {
 	if err = m.preservePlanKeys(settings); err != nil {
 		return err
 	}
+	if _, err = m.disableChatGPT(settings); err != nil {
+		return err
+	}
 	if _, err = m.disableKimi(settings); err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devthefuture-org/quotadeck/internal/chatgpt"
 	"github.com/devthefuture-org/quotadeck/internal/config"
 	"github.com/devthefuture-org/quotadeck/internal/control"
 	"github.com/devthefuture-org/quotadeck/internal/doctor"
@@ -512,6 +513,9 @@ func (f *fakeController) ConfigureOpenCode(context.Context) error {
 	f.openCodeActivated = true
 	return f.openCodeErr
 }
+
+func (f *fakeController) ConfigureChatGPT([]chatgpt.Model, *string) error { return nil }
+func (f *fakeController) DeactivateChatGPT() error                        { return nil }
 
 type fakeClaudeProvider struct{}
 

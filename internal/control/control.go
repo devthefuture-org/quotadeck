@@ -59,11 +59,12 @@ type Paths struct {
 }
 
 type Status struct {
-	OpenCode KimiStatus   `json:"opencode"`
-	Mode     string       `json:"mode"`
-	Claude   ClaudeStatus `json:"claude"`
-	ZAI      ZAIStatus    `json:"zai"`
-	Kimi     KimiStatus   `json:"kimi"`
+	ChatGPT  ChatGPTStatus `json:"chatgpt"`
+	OpenCode KimiStatus    `json:"opencode"`
+	Mode     string        `json:"mode"`
+	Claude   ClaudeStatus  `json:"claude"`
+	ZAI      ZAIStatus     `json:"zai"`
+	Kimi     KimiStatus    `json:"kimi"`
 }
 
 type ClaudeStatus struct {
@@ -91,11 +92,13 @@ type KimiStatus struct {
 }
 
 type Manager struct {
-	claudeBinary string
-	runner       runner.Runner
-	paths        Paths
-	kimiHomes    []string
-	openCode     config.OpenCodeConfig
+	claudeBinary    string
+	runner          runner.Runner
+	paths           Paths
+	kimiHomes       []string
+	openCode        config.OpenCodeConfig
+	chatGPTEndpoint string
+	chatGPTDatabase string
 
 	mu sync.Mutex
 }
@@ -193,6 +196,18 @@ func (m *Manager) Status(states []domain.AccountState) Status {
 		env, _ := settings["env"].(map[string]any)
 		status.OpenCode.Model, _ = env["ANTHROPIC_MODEL"].(string)
 	}
+	status.ChatGPT.Available = m.chatGPTEndpoint != ""
+	if status.ChatGPT.Available {
+		status.ChatGPT.ClassifierPreference = ChatGPTClassifierPreference(m.paths.ClaudeSettings)
+	}
+	env, _ := settings["env"].(map[string]any)
+	if env[chatGPTMarker] == "1" && env["ANTHROPIC_BASE_URL"] == m.chatGPTEndpoint {
+		status.Mode = "chatgpt"
+		status.ChatGPT.Active = true
+		status.ChatGPT.Model, _ = env["ANTHROPIC_MODEL"].(string)
+		status.ChatGPT.FableModel, _ = env["ANTHROPIC_DEFAULT_FABLE_MODEL"].(string)
+		status.ChatGPT.ClassifierModel, _ = env["CLAUDE_CODE_AUTO_MODE_MODEL"].(string)
+	}
 	return status
 }
 
@@ -218,7 +233,11 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 	if err := m.preservePlanKeys(settings); err != nil {
 		return err
 	}
-	changed, err := m.disableKimi(settings)
+	changed, err := m.disableChatGPT(settings)
+	if err != nil {
+		return err
+	}
+	kimiChanged, err := m.disableKimi(settings)
 	if err != nil {
 		return err
 	}
@@ -230,7 +249,7 @@ func (m *Manager) SwitchClaude(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	changed = otherChanged || zaiChanged || changed
+	changed = kimiChanged || otherChanged || zaiChanged || changed
 	if changed {
 		if err := writeSettings(m.paths.ClaudeSettings, settings, snapshot.mode); err != nil {
 			return fmt.Errorf("disable API plan for Claude Code: %w", err)
@@ -413,6 +432,9 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 		return nil
 	}
 	if err := m.preservePlanKeys(settings); err != nil {
+		return err
+	}
+	if _, err := m.disableChatGPT(settings); err != nil {
 		return err
 	}
 	if _, err := m.disableKimi(settings); err != nil {

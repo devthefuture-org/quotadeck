@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { openExternally } from './externalBrowser'
 import { acceptSnapshot, formatRemaining, isActive, signInView } from './codexLogin.js'
 
 type LoginSnapshot = {
@@ -160,16 +161,4 @@ export function CodexSignIn({ state, now, onFinished }: {
       {signIn.error && <small class="signin-error">{signIn.error}</small>}
     </div>
   )
-}
-
-type WailsWindow = Window & { runtime?: { BrowserOpenURL?: (url: string) => void } }
-
-// The desktop build serves this same UI inside a WebView, where target="_blank"
-// does not necessarily reach the system browser. Wails exposes the explicit
-// call; in a plain browser tab the anchor already does the right thing.
-function openExternally(event: Event, url: string) {
-  const open = (window as WailsWindow).runtime?.BrowserOpenURL
-  if (!open || !url) return
-  event.preventDefault()
-  open(url)
 }

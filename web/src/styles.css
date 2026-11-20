@@ -243,7 +243,7 @@ select { color: var(--ink); background: var(--panel); border: 1px solid var(--li
 .control-empty { color: var(--muted); margin: 12px 0 0; }
 .plan-form { margin-top: 24px; }
 .plan-form label { display: block; margin-bottom: 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
-.plan-form input { width: 100%; border: 1px solid var(--line); color: var(--ink); background: var(--input-bg); border-radius: 12px; padding: 12px 14px; }
+.plan-form input, .plan-form select { width: 100%; border: 1px solid var(--line); color: var(--ink); background: var(--input-bg); border-radius: 12px; padding: 12px 14px; }
 .plan-form input::placeholder { color: var(--muted); }
 .plan-form p { color: var(--muted); font-size: 10px; line-height: 1.55; }
 .plan-form code { color: var(--code-ink); overflow-wrap: anywhere; }

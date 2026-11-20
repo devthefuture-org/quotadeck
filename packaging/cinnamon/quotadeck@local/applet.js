@@ -395,6 +395,9 @@ class QuotaDeckApplet extends Applet.Applet {
             return 'Z.ai · GLM Coding Plan';
         }
         if (this._control.mode === 'opencode') return 'OpenCode Go · DeepSeek V4.1 Flash';
+        if (this._control.mode === 'chatgpt') {
+            return ['ChatGPT', (this._control.chatgpt || {}).model].filter(Boolean).join(' · ');
+        }
         if (this._control.mode === 'kimi') {
             const model = (this._control.kimi || {}).model;
             return 'Kimi · ' + (model === 'k3' ? 'K3' : model || 'Coding Plan');
