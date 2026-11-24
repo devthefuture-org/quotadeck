@@ -88,13 +88,46 @@ providers:
 
 `KIMI_API_KEY` and `KIMI_CODING_API_KEY` are checked even without configuration. A Kimi base URL in `~/.claude/settings.json` is also recognized, so routing Claude Code through Kimi makes the plan appear without extra setup.
 
+## Claude Code models
+
+When a gateway plan is selected, QuotaDeck routes Claude Code's main model, every model tier (`fable`, `opus`, `sonnet`, `haiku`), sub-agents, and the auto mode classifier to the plan's model. The defaults ship inside the binary in [`internal/config/models.yaml`](https://github.com/devthefuture-org/quotadeck/blob/main/internal/config/models.yaml) and follow each release:
+
+| Plan | Default model | Context window |
+| --- | --- | --- |
+| Z.ai | `glm-5.4[1m]` (GLM-5.4) | 1M |
+| Kimi | `k3` (K3) | 256K |
+| OpenCode Go | `deepseek-v4.1-flash` (DeepSeek V4.1 Flash) | 1M |
+
+Override any field under `models:` in `config.yaml`. Fields you omit keep their defaults:
+
+```yaml
+models:
+  zai:
+    model: glm-5.4[1m]     # main model and every tier without an override
+    name: GLM-5.4          # name shown in the dashboard and the applet
+    contextWindow: 1000000 # compaction window; 0 leaves it to Claude Code
+    tiers:
+      haiku: glm-5.3-flash # optional: fable, opus, sonnet, haiku, subagent, classifier
+  chatgpt:
+    fable:
+      model: gpt-6.2-astra # used for the fable tier when your plan offers it
+      name: GPT-6.2 Astra
+    classifier: gpt-6-luna # default auto mode classifier when your plan offers it
+```
+
+A `model` replaced without a `name` is shown by its id: the default name describes the default model. A `[1m]` suffix selects Claude Code's 1M context window; Claude Code strips it before the request reaches the gateway. `contextWindow` sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, between 100K and 1M tokens.
+
+ChatGPT's main model comes from the plan's live catalog; its entries are preferences applied when the catalog offers them.
+
+A changed model applies the next time you select the plan. Until then, the dashboard no longer marks the plan as selected, so a single click moves Claude Code to the new model. Returning to a Claude subscription removes whichever model the last selection wrote.
+
 ## Dashboard configuration
 
 Open **Manage plans** on the dashboard for the same setup without editing files manually:
 
 - **Save key** updates `ZAI_API_KEY` or `KIMI_API_KEY` in the private QuotaDeck environment file;
-- **Save & use Z.ai** also configures `~/.claude/settings.json` for the official Z.ai Anthropic endpoint;
-- **Save & use Kimi K3** configures the Kimi Code endpoint and selects `k3` for all Claude Code model tiers; an existing file-backed Kimi Code login is used automatically when no API key is configured;
+- **Save & use Z.ai** also configures `~/.claude/settings.json` for the official Z.ai Anthropic endpoint and selects the configured Z.ai model (GLM-5.4 by default) for all Claude Code model tiers;
+- **Save & use Kimi K3** configures the Kimi Code endpoint and selects the configured Kimi model (`k3` by default) for all Claude Code model tiers; an existing file-backed Kimi Code login is used automatically when no API key is configured;
 - choosing **Use in Claude Code** on a Claude quota card removes the active Z.ai or Kimi routing keys and runs `cswap switch` for the selected slot.
 
 For local Kimi Code authentication, the helper follows the OAuth reference and region in `~/.kimi-code/config.toml` (or `providers.kimi.homePaths`). It renews expiring tokens in the CLI credential store, so Kimi Code does not need to remain open. Claude Code caches helper results for one minute. Selecting Claude or Z.ai restores the previous credential helper.

@@ -6,16 +6,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
-)
 
-const (
-	AstraModel = "gpt-6.2-astra"
-	LunaModel  = "gpt-6-luna"
+	"github.com/devthefuture-org/quotadeck/internal/config"
 )
 
 type ClaudeModels struct {
 	Default        string
 	Fable          string
+	FableName      string
 	Classifier     string
 	ContextWindows map[string]int
 }
@@ -24,16 +22,19 @@ func ClaudeEndpoint(bind string, port int) string {
 	return "http://" + net.JoinHostPort(bind, strconv.Itoa(port)) + GatewayPath
 }
 
-func SelectClaudeModels(models []Model, defaultModel, classifierPreference string) ClaudeModels {
+// SelectClaudeModels applies the configured Fable and classifier preferences
+// when the plan's catalog offers them; otherwise both use the default model.
+func SelectClaudeModels(models []Model, defaultModel, classifierPreference string, preferences config.ChatGPTModels) ClaudeModels {
 	selection := ClaudeModels{Default: defaultModel, Fable: defaultModel, Classifier: defaultModel, ContextWindows: map[string]int{}}
+	fable := preferences.Fable.Model
 	for _, model := range models {
-		if model.Slug == AstraModel {
-			selection.Fable = model.Slug
+		if fable != "" && model.Slug == fable {
+			selection.Fable, selection.FableName = model.Slug, preferences.Fable.Name
 		}
-		if model.Slug == LunaModel {
+		if preferences.Classifier != "" && model.Slug == preferences.Classifier {
 			selection.Classifier = model.Slug
 		}
-		if (model.Slug == defaultModel || model.Slug == AstraModel) && model.ContextWindow >= 100_000 {
+		if (model.Slug == defaultModel || fable != "" && model.Slug == fable) && model.ContextWindow >= 100_000 {
 			selection.ContextWindows[model.Slug] = model.ContextWindow
 		}
 	}
@@ -68,8 +69,8 @@ func (models ClaudeModels) Environment(endpoint string) map[string]string {
 		"ENABLE_CLAUDEAI_MCP_SERVERS":              "false", "ENABLE_TOOL_SEARCH": "false",
 		"NO_PROXY": noProxy, "no_proxy": noProxy,
 	}
-	if fableModel == AstraModel {
-		env["ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"] = "GPT-6.2 Astra"
+	if models.FableName != "" {
+		env["ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"] = models.FableName
 	}
 	if len(models.ContextWindows) > 0 {
 		windows, _ := json.Marshal(models.ContextWindows)

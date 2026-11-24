@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,11 +83,15 @@ type ZAIStatus struct {
 	Configured bool   `json:"configured"`
 	Active     bool   `json:"active"`
 	Endpoint   string `json:"endpoint"`
+	// Model is the main model of the active settings; ModelName names the
+	// configured model, and Selected reports that the active settings run it.
+	Model     string `json:"model,omitempty"`
+	ModelName string `json:"modelName,omitempty"`
+	Selected  bool   `json:"selected"`
 }
 
 type KimiStatus struct {
 	ZAIStatus
-	Model          string `json:"model,omitempty"`
 	Source         string `json:"source,omitempty"`
 	LocalAvailable bool   `json:"localAvailable"`
 }
@@ -99,6 +104,7 @@ type Manager struct {
 	openCode        config.OpenCodeConfig
 	chatGPTEndpoint string
 	chatGPTDatabase string
+	models          config.ModelsConfig
 
 	mu sync.Mutex
 }
@@ -125,7 +131,7 @@ func New(claudeBinary string, commandRunner runner.Runner, paths Paths) *Manager
 	if commandRunner == nil {
 		commandRunner = runner.ExecRunner{}
 	}
-	return &Manager{claudeBinary: claudeBinary, runner: commandRunner, paths: paths}
+	return &Manager{claudeBinary: claudeBinary, runner: commandRunner, paths: paths, models: config.DefaultModels()}
 }
 
 func (m *Manager) WithKimiHomes(homes []string) *Manager {
@@ -160,6 +166,8 @@ func (m *Manager) Status(states []domain.AccountState) Status {
 	) != ""
 	if active {
 		status.Mode = "zai"
+		environment, _ := settings["env"].(map[string]any)
+		status.ZAI.Model, _ = environment["ANTHROPIC_MODEL"].(string)
 	}
 	status.Kimi.Active, settingsKey = kimiSettings(settings)
 	status.Kimi.Configured = m.kimiKey(settingsKey) != ""
@@ -196,9 +204,13 @@ func (m *Manager) Status(states []domain.AccountState) Status {
 		env, _ := settings["env"].(map[string]any)
 		status.OpenCode.Model, _ = env["ANTHROPIC_MODEL"].(string)
 	}
+	planModelStatus(&status.ZAI, m.models.ZAI)
+	planModelStatus(&status.Kimi.ZAIStatus, m.models.Kimi)
+	planModelStatus(&status.OpenCode.ZAIStatus, m.models.OpenCode)
 	status.ChatGPT.Available = m.chatGPTEndpoint != ""
 	if status.ChatGPT.Available {
 		status.ChatGPT.ClassifierPreference = ChatGPTClassifierPreference(m.paths.ClaudeSettings)
+		status.ChatGPT.DefaultClassifier = m.models.ChatGPT.Classifier
 	}
 	env, _ := settings["env"].(map[string]any)
 	if env[chatGPTMarker] == "1" && env["ANTHROPIC_BASE_URL"] == m.chatGPTEndpoint {
@@ -443,12 +455,11 @@ func (m *Manager) ConfigureZAI(_ context.Context, apiKey string, activate bool) 
 	if _, err := m.disableOpenCode(settings); err != nil {
 		return err
 	}
-	if !wasActive {
-		if err := m.preserveZAIKeys(settings); err != nil {
-			return err
-		}
+	managed := m.zaiEnvironment()
+	if err := m.preserveZAIKeys(settings, wasActive, managed); err != nil {
+		return err
 	}
-	if err := enableZAI(settings, effectiveKey); err != nil {
+	if err := enableZAI(settings, effectiveKey, managed); err != nil {
 		return fmt.Errorf("update Claude settings: %w", err)
 	}
 	if err := writeSettings(m.paths.ClaudeSettings, settings, 0o600); err != nil {
@@ -540,16 +551,29 @@ func recognizedZAI(raw string) bool {
 	return host == "api.z.ai" || host == "z.ai" || strings.HasSuffix(host, ".z.ai") || host == "open.bigmodel.cn" || strings.HasSuffix(host, ".bigmodel.cn")
 }
 
-// zaiManagedEnvironment lists the fixed-value env keys enableZAI writes.
-// disableZAI restores the user's previous value for each key the user has
-// not changed after activating Z.ai.
-var zaiManagedEnvironment = map[string]string{
+// zaiFixedEnvironment lists the env keys enableZAI writes besides the
+// configured model (see zaiEnvironment). Without a model, Z.ai maps Claude
+// model names server-side to an older GLM.
+var zaiFixedEnvironment = map[string]string{
 	"API_TIMEOUT_MS":         managedTimeout,
 	autoModeServerSwitch:     "0",
 	claudeAiConnectorsSwitch: claudeAiConnectorsOff,
 }
 
-func enableZAI(settings map[string]any, apiKey string) error {
+// zaiEnvironment lists the env keys enableZAI writes. disableZAI restores the
+// user's previous value for each key the user has not changed after
+// activating Z.ai.
+func (m *Manager) zaiEnvironment() map[string]string {
+	return withModel(zaiFixedEnvironment, m.models.ZAI)
+}
+
+// zaiCapturedKey lists, inside the Z.ai sidecar, the managed keys whose
+// pre-Z.ai value the sidecar already settled; a settled key without a value
+// means the user had none. A key Z.ai starts managing later is settled at the
+// first activation that manages it.
+const zaiCapturedKey = "quotadeck:captured"
+
+func enableZAI(settings map[string]any, apiKey string, managed map[string]string) error {
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
 		return err
@@ -557,28 +581,62 @@ func enableZAI(settings map[string]any, apiKey string) error {
 	environment["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	delete(environment, "ANTHROPIC_API_KEY")
 	environment["ANTHROPIC_BASE_URL"] = zaiEndpoint
-	for name, value := range zaiManagedEnvironment {
+	for name, value := range managed {
 		environment[name] = value
 	}
 	return nil
 }
 
-func (m *Manager) preserveZAIKeys(settings map[string]any) error {
-	if _, err := os.Stat(m.zaiPreferencesPath()); err == nil {
-		// The sidecar holds the preferences from before the FIRST activation:
-		// a later activation sees env values that may already be managed ones.
-		return nil
+// preserveZAIKeys records, once per managed key, the value disableZAI must
+// restore, and the values this activation writes. A settled key is never
+// captured again: once Z.ai has been activated, the environment may hold
+// managed values or Z.ai-only edits.
+func (m *Manager) preserveZAIKeys(settings map[string]any, wasActive bool, managed map[string]string) error {
+	snapshot, err := snapshotFile(m.zaiPreferencesPath())
+	if err != nil {
+		return fmt.Errorf("read Claude environment preferences: %w", err)
+	}
+	previous, err := settingsFromSnapshot(snapshot)
+	if err != nil {
+		return fmt.Errorf("parse Claude environment preferences: %w", err)
+	}
+	settled := map[string]bool{}
+	if names, ok := previous[zaiCapturedKey].([]any); ok {
+		for _, name := range names {
+			if name, ok := name.(string); ok {
+				settled[name] = true
+			}
+		}
+	} else {
+		// A sidecar written before zaiCapturedKey does not say which keys it
+		// settled without a value: only the keys it holds count as settled.
+		for name := range previous {
+			settled[name] = true
+		}
 	}
 	environment, err := settingsEnvironment(settings)
 	if err != nil {
 		return err
 	}
-	previous := map[string]any{}
-	for name := range zaiManagedEnvironment {
-		if value, exists := environment[name]; exists {
+	// Only the first activation sees the user's own environment untouched;
+	// afterwards a value Z.ai writes is a leftover of ours, not a preference.
+	pristine := !snapshot.exists && !wasActive
+	for name := range managed {
+		if settled[name] {
+			continue
+		}
+		settled[name] = true
+		if value, exists := environment[name]; exists && (pristine || !writtenByGateway(name, value, managed, previous)) {
 			previous[name] = value
 		}
 	}
+	names := make([]string, 0, len(settled))
+	for name := range settled {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	previous[zaiCapturedKey] = names
+	recordManaged(previous, managed)
 	if err := writeSettings(m.zaiPreferencesPath(), previous, 0o600); err != nil {
 		return fmt.Errorf("preserve Claude environment preferences: %w", err)
 	}
@@ -604,17 +662,7 @@ func (m *Manager) disableZAI(settings map[string]any) (bool, error) {
 	}
 	delete(environment, "ANTHROPIC_AUTH_TOKEN")
 	delete(environment, "ANTHROPIC_BASE_URL")
-	for name, managed := range zaiManagedEnvironment {
-		// Keep changes the user made after activating Z.ai.
-		if value, _ := environment[name].(string); value != managed {
-			continue
-		}
-		if old, exists := previous[name]; exists {
-			environment[name] = old
-		} else {
-			delete(environment, name)
-		}
-	}
+	restoreManaged(environment, m.zaiEnvironment(), previous)
 	if len(environment) == 0 {
 		delete(settings, "env")
 	}

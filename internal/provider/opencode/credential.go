@@ -23,7 +23,6 @@ import (
 )
 
 const Endpoint = "https://opencode.ai/inference/go/anthropic"
-const Model = "deepseek-v4.1-flash"
 const consoleURL = "https://opencode.ai/console"
 
 var ErrLoginRequired = errors.New("reconnect OpenCode Console in OpenCode v2")

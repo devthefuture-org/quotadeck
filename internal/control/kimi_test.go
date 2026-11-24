@@ -213,7 +213,7 @@ func TestKimiAndZAIKeepKeysAcrossSwitches(t *testing.T) {
 			}
 			settings, _ := readSettings(paths.ClaudeSettings)
 			env = settings["env"].(map[string]any)
-			if env["ANTHROPIC_BASE_URL"] != zaiEndpoint || env["ANTHROPIC_AUTH_TOKEN"] != "zai-existing-fixture" || env["ANTHROPIC_API_KEY"] != nil || env["ANTHROPIC_MODEL"] != nil || env["KEEP_ME"] != "yes" {
+			if env["ANTHROPIC_BASE_URL"] != zaiEndpoint || env["ANTHROPIC_AUTH_TOKEN"] != "zai-existing-fixture" || env["ANTHROPIC_API_KEY"] != nil || env["ANTHROPIC_MODEL"] != manager.models.ZAI.Model || env["KEEP_ME"] != "yes" {
 				t.Fatal("switching left Kimi settings in the Z.ai plan")
 			}
 			status := manager.Status(nil)

@@ -17,6 +17,7 @@ type Config struct {
 	Storage   StorageConfig   `yaml:"storage"`
 	Polling   PollingConfig   `yaml:"polling"`
 	Providers ProvidersConfig `yaml:"providers"`
+	Models    ModelsConfig    `yaml:"models"`
 }
 
 type ServerConfig struct {
@@ -118,6 +119,7 @@ func Default() Config {
 			Codex:    CodexConfig{Enabled: true, Binary: "codex"},
 			Kimi:     KimiConfig{Enabled: true, RequestTimeout: "15s", MaxRetries: 3},
 		},
+		Models: DefaultModels(),
 	}
 }
 
@@ -151,6 +153,9 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("read config: %w", err)
 	}
 	if err := yaml.Unmarshal(contents, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+	if err := cfg.Models.dropInheritedNames(contents); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -189,7 +194,7 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return c.Models.Validate()
 }
 
 // validateKimiBaseURL refuses anything but absolute HTTPS URLs, so a typo in

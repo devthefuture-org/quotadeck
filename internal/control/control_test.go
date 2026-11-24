@@ -113,6 +113,105 @@ func TestConfigureZAIKeepsExistingSidecar(t *testing.T) {
 	}
 }
 
+func TestConfigureZAIRoutesEveryTierToGLMAndRestoresPreferences(t *testing.T) {
+	clearPlanKeys(t)
+	manager, paths := testManager(t, &fakeRunner{})
+	// The first activation keeps even a preference equal to a managed value.
+	original := map[string]any{"env": map[string]any{
+		"KEEP_ME": "yes", "ANTHROPIC_MODEL": "opus", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000", "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
+	}}
+	if err := writeSettings(paths.ClaudeSettings, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "zai-model-fixture", true); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := readSettings(paths.ClaudeSettings)
+	env := settings["env"].(map[string]any)
+	for _, name := range []string{"ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"} {
+		if env[name] != "glm-5.4[1m]" {
+			t.Fatalf("%s must select GLM-5.4 with the 1M window: %#v", name, env[name])
+		}
+	}
+	if env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" {
+		t.Fatalf("the 1M context window was not configured: %#v", env)
+	}
+	if status := manager.Status(nil); status.Mode != "zai" || status.ZAI.Model != "glm-5.4[1m]" {
+		t.Fatalf("Z.ai status must report the selected model: %#v", status.ZAI)
+	}
+	if err := manager.SwitchClaude(t.Context(), "claude:cswap:2"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := readSettings(paths.ClaudeSettings)
+	if !reflect.DeepEqual(restored, original) {
+		t.Fatalf("preferences not restored after Claude → Z.ai → Claude: %#v", restored)
+	}
+}
+
+// A sidecar written before Z.ai managed the model keys does not hold them:
+// the next activation settles them from the user's own environment, never
+// from a leftover managed value.
+func TestConfigureZAISettlesKeysMissingFromAnOlderSidecar(t *testing.T) {
+	clearPlanKeys(t)
+	manager, paths := testManager(t, &fakeRunner{})
+	if err := writeSettings(paths.ClaudeSettings, map[string]any{"env": map[string]any{
+		"KEEP_ME": "yes", "ANTHROPIC_MODEL": "opus", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.4[1m]",
+	}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSettings(manager.zaiPreferencesPath(), map[string]any{"API_TIMEOUT_MS": "120000"}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "zai-upgrade-fixture", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchClaude(t.Context(), "claude:cswap:2"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := readSettings(paths.ClaudeSettings)
+	want := map[string]any{"env": map[string]any{"KEEP_ME": "yes", "ANTHROPIC_MODEL": "opus", "API_TIMEOUT_MS": "120000"}}
+	if !reflect.DeepEqual(restored, want) {
+		t.Fatalf("older sidecar round trip = %#v, want %#v", restored, want)
+	}
+}
+
+// Re-selecting an active Z.ai plan settles each newly managed key once; a
+// value edited while Z.ai is active is never taken for a Claude preference.
+func TestConfigureZAIWhileActiveSettlesEachKeyOnce(t *testing.T) {
+	clearPlanKeys(t)
+	manager, paths := testManager(t, &fakeRunner{})
+	if err := writeSettings(paths.ClaudeSettings, map[string]any{"env": map[string]any{
+		"KEEP_ME": "yes", "ANTHROPIC_MODEL": "opus",
+		"ANTHROPIC_BASE_URL": zaiEndpoint, "ANTHROPIC_AUTH_TOKEN": "zai-active-fixture",
+		"API_TIMEOUT_MS": managedTimeout, autoModeServerSwitch: "0", claudeAiConnectorsSwitch: claudeAiConnectorsOff,
+	}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSettings(manager.zaiPreferencesPath(), map[string]any{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "", true); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := readSettings(paths.ClaudeSettings)
+	settings["env"].(map[string]any)["ANTHROPIC_MODEL"] = "glm-5.3"
+	if err := writeSettings(paths.ClaudeSettings, settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ConfigureZAI(t.Context(), "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchClaude(t.Context(), "claude:cswap:2"); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := readSettings(paths.ClaudeSettings)
+	want := map[string]any{"env": map[string]any{"KEEP_ME": "yes", "ANTHROPIC_MODEL": "opus"}}
+	if !reflect.DeepEqual(restored, want) {
+		t.Fatalf("re-selection round trip = %#v, want %#v", restored, want)
+	}
+}
+
 func TestConfigureZAIStoresPrivateKeyAndNeverReturnsIt(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 	manager, paths := testManager(t, &fakeRunner{})

@@ -54,7 +54,7 @@ func claudeCommand(args []string) error {
 	}
 	defer os.Remove(settings.Name())
 	paths := control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths)
-	selection := chatgpt.SelectClaudeModels(models, *model, control.ChatGPTClassifierPreference(paths.ClaudeSettings))
+	selection := chatgpt.SelectClaudeModels(models, *model, control.ChatGPTClassifierPreference(paths.ClaudeSettings), cfg.Models.ChatGPT)
 	env := selection.Environment(endpoint)
 	env["ANTHROPIC_API_KEY"] = key
 	modelSettings := map[string]map[string]int{}

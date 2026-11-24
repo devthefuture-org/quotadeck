@@ -391,16 +391,16 @@ class QuotaDeckApplet extends Applet.Applet {
         if (!this._control) {
             return _('Detecting…');
         }
-        if (this._control.mode === 'zai') {
-            return 'Z.ai · GLM Coding Plan';
+        // Models come from QuotaDeck's configuration: the configured name
+        // shows only while the active settings run that model.
+        const gateways = { zai: ['Z.ai', 'GLM Coding Plan'], opencode: ['OpenCode Go', 'Go'], kimi: ['Kimi', 'Coding Plan'] };
+        const gateway = gateways[this._control.mode];
+        if (gateway) {
+            const status = this._control[this._control.mode] || {};
+            return gateway[0] + ' · ' + (status.selected && status.modelName ? status.modelName : status.model || gateway[1]);
         }
-        if (this._control.mode === 'opencode') return 'OpenCode Go · DeepSeek V4.1 Flash';
         if (this._control.mode === 'chatgpt') {
             return ['ChatGPT', (this._control.chatgpt || {}).model].filter(Boolean).join(' · ');
-        }
-        if (this._control.mode === 'kimi') {
-            const model = (this._control.kimi || {}).model;
-            return 'Kimi · ' + (model === 'k3' ? 'K3' : model || 'Coding Plan');
         }
         if (this._control.mode === 'claude') {
             const activeId = ((this._control.claude || {}).activeAccountId);

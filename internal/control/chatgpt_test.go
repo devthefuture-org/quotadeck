@@ -2,6 +2,7 @@ package control
 
 import (
 	"errors"
+	"github.com/devthefuture-org/quotadeck/internal/config"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,12 @@ import (
 	"testing"
 
 	"github.com/devthefuture-org/quotadeck/internal/chatgpt"
+)
+
+// The shipped ChatGPT preferences (config's models.yaml).
+var (
+	astraModel = config.DefaultModels().ChatGPT.Fable.Model
+	lunaModel  = config.DefaultModels().ChatGPT.Classifier
 )
 
 func prepareChatGPT(t *testing.T, manager *Manager) string {
@@ -56,18 +63,18 @@ func TestChatGPTActivationRestoresSettings(t *testing.T) {
 			}
 			// Migrate the active plan from settings that predate per-model windows.
 			catalog := []chatgpt.Model{
-				{Slug: "gpt-first", ContextWindow: 500_000}, {Slug: chatgpt.AstraModel, ContextWindow: 272_000},
-				{Slug: "gpt-second", ContextWindow: 600_000}, {Slug: chatgpt.LunaModel, ContextWindow: 272_000},
+				{Slug: "gpt-first", ContextWindow: 500_000}, {Slug: astraModel, ContextWindow: 272_000},
+				{Slug: "gpt-second", ContextWindow: 600_000}, {Slug: lunaModel, ContextWindow: 272_000},
 			}
 			if err := manager.ConfigureChatGPT(catalog, nil); err != nil {
 				t.Fatal(err)
 			}
 			migrated, _ := readSettings(paths.ClaudeSettings)
 			migratedEnv := migrated["env"].(map[string]any)
-			if migratedEnv["ANTHROPIC_MODEL"] != "gpt-first" || migratedEnv["ANTHROPIC_DEFAULT_FABLE_MODEL"] != chatgpt.AstraModel {
+			if migratedEnv["ANTHROPIC_MODEL"] != "gpt-first" || migratedEnv["ANTHROPIC_DEFAULT_FABLE_MODEL"] != astraModel {
 				t.Fatal("reapplying the active plan did not update the Fable alias")
 			}
-			if migratedEnv["CLAUDE_CODE_AUTO_MODE_MODEL"] != chatgpt.LunaModel || migratedEnv[autoModeServerSwitch] != "0" {
+			if migratedEnv["CLAUDE_CODE_AUTO_MODE_MODEL"] != lunaModel || migratedEnv[autoModeServerSwitch] != "0" {
 				t.Fatal("reapplying should route the classifier to Luna separately from the main model")
 			}
 			if got := migrated["modelSettings"].(map[string]any)["gpt-first"].(map[string]any)[compactWindowSetting]; got != float64(500_000) {
@@ -86,7 +93,7 @@ func TestChatGPTActivationRestoresSettings(t *testing.T) {
 			modelSettings := active["modelSettings"].(map[string]any)
 			if env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "600000" ||
 				!reflect.DeepEqual(modelSettings["gpt-second"], map[string]any{compactWindowSetting: float64(600_000), "effortLevel": "high"}) ||
-				!reflect.DeepEqual(modelSettings[chatgpt.AstraModel], map[string]any{compactWindowSetting: float64(272_000)}) ||
+				!reflect.DeepEqual(modelSettings[astraModel], map[string]any{compactWindowSetting: float64(272_000)}) ||
 				!reflect.DeepEqual(modelSettings["gpt-first"], map[string]any{}) {
 				t.Fatalf("unexpected auto-compact settings after reapplying: %+v", modelSettings)
 			}
@@ -99,7 +106,7 @@ func TestChatGPTActivationRestoresSettings(t *testing.T) {
 			}
 			status := manager.Status(nil)
 			if status.Mode != "chatgpt" || !status.ChatGPT.Active || status.ChatGPT.Model != "gpt-second" ||
-				status.ChatGPT.FableModel != chatgpt.AstraModel {
+				status.ChatGPT.FableModel != astraModel {
 				t.Fatalf("unexpected plan state: %+v", status)
 			}
 			if strings.Contains(string(mustJSON([]any{active, status})), gatewayKey) {
@@ -191,19 +198,19 @@ func TestChatGPTClassifierPreference(t *testing.T) {
 	prepareChatGPT(t, manager)
 	const sol = "gpt-6.2-sol"
 	alternate := "gpt-6.1-terra"
-	catalog := []chatgpt.Model{{Slug: sol}, {Slug: chatgpt.AstraModel}, {Slug: chatgpt.LunaModel}, {Slug: alternate}}
+	catalog := []chatgpt.Model{{Slug: sol}, {Slug: astraModel}, {Slug: lunaModel}, {Slug: alternate}}
 	check := func(active bool, preference, classifier string) {
 		t.Helper()
 		status := manager.Status(nil).ChatGPT
 		if status.Active != active || status.ClassifierPreference != preference || status.ClassifierModel != classifier ||
-			(active && (status.Model != sol || status.FableModel != chatgpt.AstraModel)) {
+			(active && (status.Model != sol || status.FableModel != astraModel)) {
 			t.Fatalf("unexpected ChatGPT selection: %+v", status)
 		}
 	}
 	if err := manager.ConfigureChatGPT(catalog, nil); err != nil {
 		t.Fatal(err)
 	}
-	check(true, "", chatgpt.LunaModel)
+	check(true, "", lunaModel)
 	if err := manager.ConfigureChatGPT(catalog, &alternate); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +228,7 @@ func TestChatGPTClassifierPreference(t *testing.T) {
 	if err := manager.ConfigureChatGPT(catalog[:3], nil); err != nil {
 		t.Fatal(err)
 	}
-	check(true, alternate, chatgpt.LunaModel)
+	check(true, alternate, lunaModel)
 	if err := manager.ConfigureChatGPT(catalog, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +237,5 @@ func TestChatGPTClassifierPreference(t *testing.T) {
 	if err := manager.ConfigureChatGPT(catalog, &defaultClassifier); err != nil {
 		t.Fatal(err)
 	}
-	check(true, "", chatgpt.LunaModel)
+	check(true, "", lunaModel)
 }

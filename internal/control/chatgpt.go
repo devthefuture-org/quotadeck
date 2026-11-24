@@ -26,6 +26,9 @@ type ChatGPTStatus struct {
 	FableModel           string `json:"fableModel,omitempty"`
 	ClassifierModel      string `json:"classifierModel,omitempty"`
 	ClassifierPreference string `json:"classifierPreference,omitempty"`
+	// DefaultClassifier is the configured classifier used without a preference
+	// when the plan offers it.
+	DefaultClassifier string `json:"defaultClassifier,omitempty"`
 }
 
 func (m *Manager) WithChatGPT(endpoint, database string) *Manager {
@@ -49,7 +52,7 @@ func (m *Manager) ConfigureChatGPT(catalog []chatgpt.Model, classifier *string) 
 	if classifier != nil {
 		preference = *classifier
 	}
-	models := chatgpt.SelectClaudeModels(catalog, catalog[0].Slug, preference)
+	models := chatgpt.SelectClaudeModels(catalog, catalog[0].Slug, preference, m.models.ChatGPT)
 	if classifier != nil && preference != "" && preference != models.Classifier {
 		return ErrChatGPTClassifierUnknown
 	}

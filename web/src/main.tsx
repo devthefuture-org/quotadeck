@@ -43,12 +43,15 @@ type Snapshot = {
 }
 type AccountState = { account: Account; snapshot: Snapshot }
 type StateResponse = { generatedAt: string; providers: Provider[]; accounts: AccountState[] }
+// model runs in the active settings; modelName names the configured model, and
+// selected reports that the active settings run it.
+type GatewayStatus = { configured: boolean; active: boolean; endpoint: string; model?: string; modelName?: string; selected?: boolean }
 type ControlState = {
   mode: 'claude' | 'zai' | 'kimi' | 'opencode' | 'chatgpt' | 'unknown'
   claude: { available: boolean; activeAccountId?: string }
-  zai: { configured: boolean; active: boolean; endpoint: string }
-  opencode: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
-  kimi: { configured: boolean; active: boolean; endpoint: string; model?: string; source?: string; localAvailable?: boolean }
+  zai: GatewayStatus
+  opencode: GatewayStatus & { source?: string; localAvailable?: boolean }
+  kimi: GatewayStatus & { source?: string; localAvailable?: boolean }
   chatgpt?: ChatGPTSelection
 }
 type DoctorReport = {
@@ -65,13 +68,30 @@ const providerLabel: Record<string, string> = { claude: 'Claude', codex: 'Codex'
 type APIPlan = 'zai' | 'kimi'
 type SelectablePlan = APIPlan | 'opencode' | 'chatgpt'
 const apiPlans = {
-  opencode: { label: 'OpenCode Go', glyph: 'O', description: 'DeepSeek V4.1 Flash for Claude Code' },
-  zai: { label: 'Z.ai', glyph: 'Z', description: 'GLM Coding Plan for Claude Code', endpoint: 'https://api.z.ai/api/anthropic', keyURL: 'https://z.ai/manage-apikey/apikey-list' },
-  kimi: { label: 'Kimi', glyph: '☾', description: 'Kimi K3 for Claude Code', endpoint: 'https://api.kimi.com/coding/', keyURL: 'https://www.kimi.com/code/console' },
+  opencode: { label: 'OpenCode Go', glyph: 'O', plan: 'Go' },
+  zai: { label: 'Z.ai', glyph: 'Z', plan: 'GLM Coding Plan', endpoint: 'https://api.z.ai/api/anthropic', keyURL: 'https://z.ai/manage-apikey/apikey-list' },
+  kimi: { label: 'Kimi', glyph: '☾', plan: 'Coding Plan', endpoint: 'https://api.kimi.com/coding/', keyURL: 'https://www.kimi.com/code/console' },
+}
+type GatewayPlan = keyof typeof apiPlans
+
+// Models come from QuotaDeck's configuration: a gateway counts as selected
+// only while the active settings run the configured model.
+function isPlanSelected(control: ControlState | null, provider: SelectablePlan) {
+  return control?.mode === provider && (provider === 'chatgpt' || control[provider]?.selected === true)
 }
 
-function isPlanSelected(control: ControlState | null, provider: SelectablePlan) {
-  return control?.mode === provider && (provider !== 'kimi' || control.kimi?.model === 'k3') && (provider !== 'opencode' || control.opencode?.model === 'deepseek-v4.1-flash')
+function planModelName(control: ControlState | null, provider: GatewayPlan) {
+  return control?.[provider]?.modelName || apiPlans[provider].plan
+}
+
+function planTitle(control: ControlState | null, provider: GatewayPlan) {
+  const name = control?.[provider]?.modelName
+  return name ? `${apiPlans[provider].label} ${name}` : apiPlans[provider].label
+}
+
+function selectedGatewayLabel(control: ControlState, provider: GatewayPlan) {
+  const status = control[provider]
+  return `${apiPlans[provider].label} · ${status?.selected && status.modelName ? status.modelName : status?.model || apiPlans[provider].plan}`
 }
 
 function App() {
@@ -108,10 +128,8 @@ function App() {
   })
   const selectedAccount = state?.accounts.find(item => item.account.id === control?.claude.activeAccountId)?.account
   const selectedPlan = !control ? 'Plan selection unavailable'
-    : control.mode === 'zai' ? 'Z.ai · GLM Coding Plan'
-    : control.mode === 'opencode' ? 'OpenCode Go · DeepSeek V4.1 Flash'
+    : control.mode === 'zai' || control.mode === 'opencode' || control.mode === 'kimi' ? selectedGatewayLabel(control, control.mode)
     : control.mode === 'chatgpt' ? ['ChatGPT', control.chatgpt?.model].filter(Boolean).join(' · ')
-    : control.mode === 'kimi' ? `Kimi · ${control.kimi?.model === 'k3' ? 'K3' : control.kimi?.model || 'Coding Plan'}`
     : control.mode === 'claude' ? [selectedAccount?.label || 'Claude subscription', selectedAccount?.plan].filter(Boolean).join(' · ')
     : 'No plan selected'
 
@@ -254,7 +272,7 @@ function App() {
                 </div>
                 <div class="provider-content">
                   {(provider === 'zai' || provider === 'kimi' || provider === 'opencode') && <div class="provider-plan-action">
-                    <div><strong>{apiPlans[provider].description}</strong><small>{isPlanSelected(control, provider) ? 'Selected for new sessions' : provider === 'opencode' ? 'Use your local OpenCode connection for new sessions' : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' ? 'Use your local Kimi Code login for new sessions' : `Use your configured ${apiPlans[provider].label} key for new sessions`}</small></div>
+                    <div><strong>{planModelName(control, provider)} for Claude Code</strong><small>{isPlanSelected(control, provider) ? 'Selected for new sessions' : provider === 'opencode' ? 'Use your local OpenCode connection for new sessions' : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' ? 'Use your local Kimi Code login for new sessions' : `Use your configured ${apiPlans[provider].label} key for new sessions`}</small></div>
                     <button class={isPlanSelected(control, provider) ? 'selected-plan-button' : 'plan-button'}
                       disabled={!control || isPlanSelected(control, provider) || plans.busy !== ''}
                       onClick={() => {
@@ -264,7 +282,7 @@ function App() {
                           requestAnimationFrame(() => provider !== 'opencode' && plans.apiKeyInputs[provider].current?.focus())
                         }
                       }}>
-                      {plans.busy === `${provider}-activate` ? 'Switching…' : isPlanSelected(control, provider) ? 'Selected in Claude Code' : control?.[provider]?.configured ? `Use ${apiPlans[provider].label}${provider === 'kimi' ? ' K3' : ''} in Claude Code` : `Set up ${apiPlans[provider].label}`}
+                      {plans.busy === `${provider}-activate` ? 'Switching…' : isPlanSelected(control, provider) ? 'Selected in Claude Code' : control?.[provider]?.configured ? `Use ${provider === 'opencode' ? apiPlans.opencode.label : planTitle(control, provider)} in Claude Code` : `Set up ${apiPlans[provider].label}`}
                     </button>
                   </div>}
                   <div class="card-grid">
@@ -490,21 +508,21 @@ function PlanSetup({ state, control, plans }: { state: StateResponse | null; con
       </section>
       <section class="plan-panel">
         <div class="plan-heading">
-          <div><span class="provider-glyph opencode">O</span><div><p>OpenCode Go</p><small>DeepSeek V4.1 Flash for Claude Code</small></div></div>
+          <div><span class="provider-glyph opencode">O</span><div><p>OpenCode Go</p><small>{planModelName(control, 'opencode')} for Claude Code</small></div></div>
           <span class={`availability ${control?.opencode?.configured ? 'ok' : ''}`}>{control?.opencode?.configured ? 'local login' : 'setup needed'}</span>
         </div>
         <div class="plan-form">
-          <p>{control?.opencode?.configured ? 'Your OpenCode v2 connection is available. QuotaDeck renews it automatically and tracks your Go usage.' : 'Connect OpenCode Console in OpenCode v2 to see your Go quotas and use DeepSeek in Claude Code.'}</p>
-          <p>Uses the DeepSeek V4.1 Flash model available through Go. Enable Global in your OpenCode workspace privacy settings to allow this model.</p>
+          <p>{control?.opencode?.configured ? 'Your OpenCode v2 connection is available. QuotaDeck renews it automatically and tracks your Go usage.' : `Connect OpenCode Console in OpenCode v2 to see your Go quotas and use ${planModelName(control, 'opencode')} in Claude Code.`}</p>
+          <p>Uses the {planModelName(control, 'opencode')} model available through Go. Enable Global in your OpenCode workspace privacy settings to allow this model.</p>
           <button class="refresh-button" disabled={!control?.opencode?.configured || busy !== '' || isPlanSelected(control, 'opencode')} onClick={() => void plans.selectAPIPlan('opencode')}>
-            {busy === 'opencode-activate' ? 'Switching…' : isPlanSelected(control, 'opencode') ? 'Selected in Claude Code' : 'Use DeepSeek V4.1 Flash'}
+            {busy === 'opencode-activate' ? 'Switching…' : isPlanSelected(control, 'opencode') ? 'Selected in Claude Code' : `Use ${planModelName(control, 'opencode')}`}
           </button>
           <a href="https://opencode.ai/console" target="_blank" rel="noreferrer">Open OpenCode Console ↗</a>
         </div>
       </section>
       {(['zai', 'kimi'] as const).map(provider => <section class="plan-panel" key={provider}>
         <div class="plan-heading">
-          <div><span class={`provider-glyph ${provider}`}>{apiPlans[provider].glyph}</span><div><p>{apiPlans[provider].label}</p><small>{apiPlans[provider].description}</small></div></div>
+          <div><span class={`provider-glyph ${provider}`}>{apiPlans[provider].glyph}</span><div><p>{apiPlans[provider].label}</p><small>{planModelName(control, provider)} for Claude Code</small></div></div>
           <span class={`availability ${control?.[provider]?.configured ? 'ok' : ''}`}>{!control ? 'unavailable' : provider === 'kimi' && control.kimi?.source === 'kimi-cli' ? 'local login' : control[provider]?.configured ? 'key available' : 'setup needed'}</span>
         </div>
         <div class="plan-form">
@@ -523,7 +541,7 @@ function PlanSetup({ state, control, plans }: { state: StateResponse | null; con
           <div class="plan-actions">
             <button class="quiet-button" disabled={!control || busy !== '' || apiKeys[provider].trim() === ''} onClick={() => void configureAPIPlan(provider, false)}>{busy === `${provider}-save` ? 'Saving…' : 'Save key'}</button>
             <button class="refresh-button" disabled={!control || busy !== '' || (!control?.[provider]?.configured && apiKeys[provider].trim() === '') || (isPlanSelected(control, provider) && apiKeys[provider].trim() === '')} onClick={() => void configureAPIPlan(provider, true)}>
-              {busy === `${provider}-activate` ? 'Configuring…' : isPlanSelected(control, provider) ? (apiKeys[provider].trim() === '' ? 'Selected' : 'Update active key') : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' && apiKeys.kimi.trim() === '' ? 'Use Kimi K3' : `Save & use ${apiPlans[provider].label}${provider === 'kimi' ? ' K3' : ''}`}
+              {busy === `${provider}-activate` ? 'Configuring…' : isPlanSelected(control, provider) ? (apiKeys[provider].trim() === '' ? 'Selected' : 'Update active key') : provider === 'kimi' && control?.kimi?.source === 'kimi-cli' && apiKeys.kimi.trim() === '' ? `Use ${planTitle(control, 'kimi')}` : `Save & use ${planTitle(control, provider)}`}
             </button>
           </div>
           <a href={apiPlans[provider].keyURL} target="_blank" rel="noreferrer">Open {apiPlans[provider].label} API key management ↗</a>

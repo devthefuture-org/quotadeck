@@ -62,7 +62,7 @@ func newRuntime(cfg config.Config, configPath, version string, hasListener bool)
 		cfg.Providers.Claude.Binary,
 		runner.ExecRunner{},
 		control.DefaultPaths(cfg.Providers.ZAI.SettingsPaths),
-	).WithKimiHomes(cfg.Providers.Kimi.HomePaths).WithOpenCode(cfg.Providers.OpenCode)
+	).WithKimiHomes(cfg.Providers.Kimi.HomePaths).WithOpenCode(cfg.Providers.OpenCode).WithModels(cfg.Models)
 	if hasListener {
 		controller.WithChatGPT(chatgpt.ClaudeEndpoint(cfg.Server.Bind, cfg.Server.Port), databasePath)
 	}

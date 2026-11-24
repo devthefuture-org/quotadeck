@@ -63,11 +63,22 @@ test('stale and expired windows do not claim an active block', () => {
 
 test('Kimi K3 is identified as the selected Claude Code plan', () => {
     const { applet, item } = fixture();
-    applet._control = { mode: 'kimi', kimi: { active: true, model: 'k3' } };
+    applet._control = { mode: 'kimi', kimi: { active: true, model: 'k3', modelName: 'K3', selected: true } };
     assert.equal(applet._selectedPlanLabel([item]), 'Kimi · K3');
     assert.equal(applet._isSelectedClaude(item), false);
     applet._control.kimi = {};
     assert.equal(applet._selectedPlanLabel([item]), 'Kimi · Coding Plan');
+});
+
+test('gateway labels follow the configured model, not a built-in id', () => {
+    const { applet } = fixture();
+    applet._control = { mode: 'zai', zai: { active: true, model: 'glm-5.4[1m]', modelName: 'GLM-5.4', selected: true } };
+    assert.equal(applet._selectedPlanLabel([]), 'Z.ai · GLM-5.4');
+    // An activation on another model than the configured one shows its id.
+    applet._control.zai = { active: true, model: 'glm-5.3', modelName: 'GLM-5.4', selected: false };
+    assert.equal(applet._selectedPlanLabel([]), 'Z.ai · glm-5.3');
+    applet._control = { mode: 'opencode', opencode: { active: true, model: 'next-flash', modelName: 'Next Flash', selected: true } };
+    assert.equal(applet._selectedPlanLabel([]), 'OpenCode Go · Next Flash');
 });
 
 test('ChatGPT displays the selected Claude Code model', () => {
@@ -112,7 +123,7 @@ test('non-selected Claude account still shows its 5h ring on a weekly indicator'
 
 test('OpenCode Go displays the Claude Code model and provider icon', () => {
     const { applet } = fixture();
-    applet._control = { mode: 'opencode', opencode: { active: true, model: 'deepseek-v4.1-flash' } };
+    applet._control = { mode: 'opencode', opencode: { active: true, model: 'deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash', selected: true } };
     assert.equal(applet._selectedPlanLabel([]), 'OpenCode Go · DeepSeek V4.1 Flash');
     const actor = applet._indicatorActor('opencode', '25%', 'normal');
     assert.equal(actor.children[0].gicon.file, '/applet/icon-opencode.svg');

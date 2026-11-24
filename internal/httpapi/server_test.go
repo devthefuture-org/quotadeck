@@ -135,7 +135,7 @@ func TestKimiControlGuardsErrorsAndRedaction(t *testing.T) {
 				if controller.kimiKey != "kimi-browser-fixture" || response.Control.Kimi.Active != controller.activate {
 					t.Fatal("incorrect Kimi activation")
 				}
-				if controller.activate && (response.Control.Mode != "kimi" || response.Control.Kimi.Model != "k3" || response.Control.ZAI.Active) {
+				if controller.activate && (response.Control.Mode != "kimi" || !response.Control.Kimi.Selected || response.Control.ZAI.Active) {
 					t.Fatal("response did not select K3 exclusively")
 				}
 			}

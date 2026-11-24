@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/devthefuture-org/quotadeck/internal/provider/opencode"
 )
 
 func prepareOpenCode(t *testing.T, m *Manager) {
@@ -54,7 +52,7 @@ func TestOpenCodeRoundTripRestoresModelsAndHelper(t *testing.T) {
 			}
 			settings, _ := readSettings(paths.ClaudeSettings)
 			env, _ := settingsEnvironment(settings)
-			if env["ANTHROPIC_MODEL"] != opencode.Model || env["ANTHROPIC_AUTH_TOKEN"] != "" || !openCodeActive(settings) {
+			if env["ANTHROPIC_MODEL"] != m.models.OpenCode.Model || env["ANTHROPIC_AUTH_TOKEN"] != "" || !openCodeActive(settings) {
 				t.Fatal("OpenCode not fully configured")
 			}
 			if env[claudeAiConnectorsSwitch] != claudeAiConnectorsOff {

@@ -13,21 +13,17 @@ import (
 
 const openCodeMarker = "QUOTADECK_OPENCODE_AUTH"
 
-var openCodeEnvironment = map[string]string{
-	"ANTHROPIC_MODEL":                   opencode.Model,
-	"ANTHROPIC_SMALL_FAST_MODEL":        opencode.Model,
-	"ANTHROPIC_DEFAULT_FABLE_MODEL":     opencode.Model,
-	"ANTHROPIC_DEFAULT_OPUS_MODEL":      opencode.Model,
-	"ANTHROPIC_DEFAULT_SONNET_MODEL":    opencode.Model,
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL":     opencode.Model,
-	"CLAUDE_CODE_SUBAGENT_MODEL":        opencode.Model,
+// openCodeFixedEnvironment lists the env keys ConfigureOpenCode writes
+// besides the configured model (see openCodeEnvironment).
+var openCodeFixedEnvironment = map[string]string{
 	"CLAUDE_CODE_AUTO_MODE_SERVER":      "0",
-	"CLAUDE_CODE_AUTO_MODE_MODEL":       opencode.Model,
 	claudeAiConnectorsSwitch:            claudeAiConnectorsOff,
 	"CLAUDE_CODE_EFFORT_LEVEL":          "high",
-	"CLAUDE_CODE_AUTO_COMPACT_WINDOW":   "1000000",
-	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":    "1000000",
 	"CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "60000",
+}
+
+func (m *Manager) openCodeEnvironment() map[string]string {
+	return withModel(openCodeFixedEnvironment, m.models.OpenCode)
 }
 
 func (m *Manager) WithOpenCode(cfg config.OpenCodeConfig) *Manager { m.openCode = cfg; return m }
@@ -85,9 +81,10 @@ func (m *Manager) ConfigureOpenCode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managed := m.openCodeEnvironment()
 	if !openCodeActive(settings) {
 		previous := map[string]any{}
-		for key := range openCodeEnvironment {
+		for key := range managed {
 			if v, ok := environment[key]; ok {
 				previous[key] = v
 			}
@@ -98,11 +95,14 @@ func (m *Manager) ConfigureOpenCode(ctx context.Context) error {
 		if v, ok := settings["apiKeyHelper"]; ok {
 			previous[previousHelperKey] = v
 		}
+		recordManaged(previous, managed)
 		if err = writeSettings(m.openCodePreferencesPath(), previous, 0o600); err != nil {
 			return err
 		}
+	} else if err = rememberManaged(m.openCodePreferencesPath(), managed); err != nil {
+		return err
 	}
-	for key, v := range openCodeEnvironment {
+	for key, v := range managed {
 		environment[key] = v
 	}
 	environment["ANTHROPIC_BASE_URL"] = opencode.Endpoint
@@ -125,16 +125,7 @@ func (m *Manager) disableOpenCode(settings map[string]any) (bool, error) {
 		return false, err
 	}
 	environment, _ := settingsEnvironment(settings)
-	for key, v := range openCodeEnvironment {
-		if environment[key] != v {
-			continue
-		}
-		if old, ok := previous[key]; ok {
-			environment[key] = old
-		} else {
-			delete(environment, key)
-		}
-	}
+	restoreManaged(environment, m.openCodeEnvironment(), previous)
 	if v, ok := previous[previousHelperKey]; ok {
 		settings["apiKeyHelper"] = v
 	} else {

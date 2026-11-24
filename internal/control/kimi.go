@@ -12,28 +12,22 @@ import (
 
 const kimiEndpoint = "https://api.kimi.com/coding/"
 
-// Route every Claude Code model tier to K3. The 256K cap also works with
-// membership tiers whose K3 requests do not support the full 1M context.
+// kimiFixedEnvironment lists the env keys ConfigureKimi writes besides the
+// configured model (see kimiEnvironment). Auto mode's gateway classifier also
+// runs on the Kimi endpoint, which returns no verdict for the server-side
+// review (see autoModeServerSwitch). The claude.ai connector switch keeps
+// replayed history free of Anthropic-native MCP blocks (see
+// claudeAiConnectorsSwitch).
 // https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html
-// Auto mode's gateway classifier also runs on K3: the Kimi endpoint returns
-// no verdict for the server-side review (see autoModeServerSwitch). The
-// claude.ai connector switch keeps replayed history free of Anthropic-native
-// MCP blocks (see claudeAiConnectorsSwitch).
-var kimiEnvironment = map[string]string{
-	"ANTHROPIC_MODEL":                   "k3",
-	"ANTHROPIC_SMALL_FAST_MODEL":        "k3",
-	"ANTHROPIC_DEFAULT_FABLE_MODEL":     "k3",
-	"ANTHROPIC_DEFAULT_OPUS_MODEL":      "k3",
-	"ANTHROPIC_DEFAULT_SONNET_MODEL":    "k3",
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL":     "k3",
-	"CLAUDE_CODE_SUBAGENT_MODEL":        "k3",
+var kimiFixedEnvironment = map[string]string{
 	"CLAUDE_CODE_AUTO_MODE_SERVER":      "0",
-	"CLAUDE_CODE_AUTO_MODE_MODEL":       "k3",
 	claudeAiConnectorsSwitch:            claudeAiConnectorsOff,
 	"CLAUDE_CODE_EFFORT_LEVEL":          "high",
-	"CLAUDE_CODE_AUTO_COMPACT_WINDOW":   "262144",
-	"CLAUDE_CODE_MAX_CONTEXT_TOKENS":    "262144",
 	"CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "60000",
+}
+
+func (m *Manager) kimiEnvironment() map[string]string {
+	return withModel(kimiFixedEnvironment, m.models.Kimi)
 }
 
 const kimiAuthMarker = "QUOTADECK_KIMI_AUTH"
@@ -147,12 +141,13 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 	if err != nil {
 		return err
 	}
+	managed := m.kimiEnvironment()
 	baseURL, _ := environment["ANTHROPIC_BASE_URL"].(string)
 	if !kimi.RecognizedBaseURL(baseURL) {
 		// Persist only the model preferences we override, so returning to
 		// Claude/Z.ai restores them even after a daemon restart.
 		previous := map[string]any{}
-		for name := range kimiEnvironment {
+		for name := range managed {
 			if value, exists := environment[name]; exists {
 				previous[name] = value
 			}
@@ -160,9 +155,12 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 		if value, exists := settings["apiKeyHelper"]; exists {
 			previous[previousHelperKey] = value
 		}
+		recordManaged(previous, managed)
 		if err := writeSettings(m.kimiPreferencesPath(), previous, 0o600); err != nil {
 			return fmt.Errorf("preserve Claude model preferences: %w", err)
 		}
+	} else if err := rememberManaged(m.kimiPreferencesPath(), managed); err != nil {
+		return fmt.Errorf("preserve Claude model preferences: %w", err)
 	}
 	delete(environment, "ANTHROPIC_AUTH_TOKEN")
 	if helper != "" {
@@ -182,7 +180,7 @@ func (m *Manager) ConfigureKimi(ctx context.Context, apiKey string, activate boo
 		environment["ANTHROPIC_API_KEY"] = effectiveKey
 	}
 	environment["ANTHROPIC_BASE_URL"] = endpoint
-	for name, value := range kimiEnvironment {
+	for name, value := range managed {
 		environment[name] = value
 	}
 	if err := writeSettings(m.paths.ClaudeSettings, settings, 0o600); err != nil {
@@ -227,17 +225,7 @@ func (m *Manager) disableKimi(settings map[string]any) (bool, error) {
 	delete(environment, "ANTHROPIC_AUTH_TOKEN")
 	delete(environment, "ANTHROPIC_API_KEY")
 	delete(environment, "ANTHROPIC_BASE_URL")
-	for name, managed := range kimiEnvironment {
-		// Keep changes the user made after activating Kimi.
-		if environment[name] != managed {
-			continue
-		}
-		if value, exists := previous[name]; exists {
-			environment[name] = value
-		} else {
-			delete(environment, name)
-		}
-	}
+	restoreManaged(environment, m.kimiEnvironment(), previous)
 	if len(environment) == 0 {
 		delete(settings, "env")
 	}

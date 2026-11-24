@@ -426,6 +426,7 @@ func (s *Server) configureZAI(writer http.ResponseWriter, request *http.Request)
 		if input.Activate {
 			status.Mode = "zai"
 			status.ZAI.Active = true
+			status.ZAI.Selected = true
 			status.Kimi.Active = false
 			status.OpenCode.Active = false
 		}
@@ -461,7 +462,7 @@ func (s *Server) configureKimi(writer http.ResponseWriter, request *http.Request
 		if input.Activate {
 			status.Mode = "kimi"
 			status.Kimi.Active = true
-			status.Kimi.Model = "k3"
+			status.Kimi.Selected = true
 			status.OpenCode.Active = false
 			status.ZAI.Active = false
 		}
@@ -725,7 +726,7 @@ func (s *Server) configureOpenCode(writer http.ResponseWriter, request *http.Req
 	s.writeControlResult(writer, request, "opencode", func(status *control.Status) {
 		status.Mode = "opencode"
 		status.OpenCode.Active = true
-		status.OpenCode.Model = opencode.Model
+		status.OpenCode.Selected = true
 		status.Kimi.Active = false
 		status.ZAI.Active = false
 	})

@@ -16,6 +16,7 @@ export type ChatGPTSelection = {
   model?: string
   fableModel?: string
   classifierModel?: string
+  defaultClassifier?: string
   classifierPreference?: string
 }
 
@@ -39,11 +40,11 @@ export function ChatGPTPlan({ selection, planBusy, onUse }: {
   const [models, setModels] = useState<PlanModel[] | null>(null)
   const [modelError, setModelError] = useState('')
   const [draft, setDraft] = useState<string | null>(null)
-  const { active, available, model, fableModel, classifierModel, classifierPreference = '' } = selection ?? {}
+  const { active, available, model, fableModel, classifierModel, classifierPreference = '', defaultClassifier: configuredClassifier } = selection ?? {}
   const alternateFable = active && fableModel !== model ? fableModel : undefined
   const connected = status?.connected === true
   const chosenClassifier = draft ?? classifierPreference
-  const defaultClassifier = models?.find(item => item.slug === 'gpt-6-luna') ?? models?.[0]
+  const defaultClassifier = models?.find(item => item.slug === configuredClassifier) ?? models?.[0]
   const missingClassifier = models && chosenClassifier && !models.some(item => item.slug === chosenClassifier)
 
   useEffect(() => {

@@ -1,0 +1,43 @@
+# Models QuotaDeck selects in Claude Code for each gateway plan.
+#
+# This file ships inside the binary as the up-to-date default. Override any
+# field under `models:` in config.yaml; fields you omit keep these values.
+#
+# Gateway plans (zai, kimi, opencode):
+#   name           display name in the dashboard and the applet
+#   model          id for the main model and every tier without an override;
+#                  a "[1m]" suffix selects Claude Code's 1M window and is
+#                  stripped before the request reaches the gateway
+#   contextWindow  tokens Claude Code may fill before compacting
+#                  (CLAUDE_CODE_AUTO_COMPACT_WINDOW, CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+#                  0 leaves the window to Claude Code
+#   tiers          optional ids for fable, opus, sonnet, haiku, subagent and
+#                  classifier (auto mode); an empty tier uses `model`
+#
+# ChatGPT picks the main model from the plan's live catalog; these entries are
+# preferences applied when the catalog offers them.
+
+zai:
+  # https://docs.z.ai/devpack/latest-model
+  name: GLM-5.4
+  model: glm-5.4[1m]
+  contextWindow: 1000000
+
+kimi:
+  # https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html
+  # The 256K cap also works with membership tiers whose K3 requests do not
+  # support the full 1M context.
+  name: K3
+  model: k3
+  contextWindow: 262144
+
+opencode:
+  name: DeepSeek V4.1 Flash
+  model: deepseek-v4.1-flash
+  contextWindow: 1000000
+
+chatgpt:
+  fable:
+    name: GPT-6.2 Astra
+    model: gpt-6.2-astra
+  classifier: gpt-6-luna

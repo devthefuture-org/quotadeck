@@ -61,3 +61,23 @@ providers:
     # ~/.local/state). State must match the OpenCode process for OAuth locking.
     # databasePath: ~/.local/share/opencode/opencode.db
     # statePath: ~/.local/state/opencode
+
+# Models selected in Claude Code for each gateway plan. The defaults ship in
+# the binary (internal/config/models.yaml); override only the fields you need.
+# models:
+#   zai:
+#     model: glm-5.4[1m]
+#     name: GLM-5.4
+#     contextWindow: 1000000
+#     tiers:
+#       haiku: glm-5.3-flash
+#   kimi:
+#     model: k3
+#     contextWindow: 262144
+#   opencode:
+#     model: deepseek-v4.1-flash
+#   chatgpt:
+#     fable:
+#       model: gpt-6.2-astra
+#       name: GPT-6.2 Astra
+#     classifier: gpt-6-luna
